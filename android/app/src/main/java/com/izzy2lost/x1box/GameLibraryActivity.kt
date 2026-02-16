@@ -68,6 +68,7 @@ class GameLibraryActivity : AppCompatActivity() {
   private lateinit var gamesGridContainer: LinearLayout
   private lateinit var btnChangeFolder: MaterialButton
   private lateinit var btnConvertIso: MaterialButton
+  private lateinit var btnSettings: ImageButton
   private lateinit var btnAbout: ImageButton
   private lateinit var viewModeToggle: MaterialButtonToggleGroup
   private lateinit var switchBoxArtLookup: MaterialSwitch
@@ -103,6 +104,7 @@ class GameLibraryActivity : AppCompatActivity() {
     gamesGridContainer = findViewById(R.id.library_games_grid_container)
     btnChangeFolder = findViewById(R.id.btn_change_games_folder)
     btnConvertIso = findViewById(R.id.btn_convert_iso)
+    btnSettings = findViewById(R.id.btn_library_settings)
     btnAbout = findViewById(R.id.btn_library_about)
     viewModeToggle = findViewById(R.id.library_view_mode_toggle)
     switchBoxArtLookup = findViewById(R.id.switch_box_art_lookup)
@@ -124,6 +126,9 @@ class GameLibraryActivity : AppCompatActivity() {
     }
     btnConvertIso.setOnClickListener {
       showIsoConversionPicker()
+    }
+    btnSettings.setOnClickListener {
+      startActivity(Intent(this, SettingsActivity::class.java))
     }
     btnAbout.setOnClickListener {
       showAboutDialog()

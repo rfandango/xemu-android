@@ -92,6 +92,7 @@ android {
       "META-INF/LICENSE*",
       "META-INF/NOTICE*"
     )
+    jniLibs.useLegacyPackaging = true
   }
 
   compileOptions {

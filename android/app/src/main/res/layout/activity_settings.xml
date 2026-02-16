@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:app="http://schemas.android.com/apk/res-auto"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/setup_wizard_background"
+  android:fitsSystemWindows="true">
+
+  <androidx.core.widget.NestedScrollView
+    android:id="@+id/settings_scroll"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:padding="24dp"
+    app:layout_constraintBottom_toBottomOf="parent"
+    app:layout_constraintEnd_toEndOf="parent"
+    app:layout_constraintStart_toStartOf="parent"
+    app:layout_constraintTop_toTopOf="parent">
+
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:gravity="center_horizontal"
+      android:orientation="vertical">
+
+      <!-- Header -->
+      <com.google.android.material.card.MaterialCardView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:cardBackgroundColor="@color/xemu_surface"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="8dp"
+        app:strokeColor="@color/xemu_outline_variant"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="vertical"
+          android:padding="24dp">
+
+          <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+              android:id="@+id/btn_settings_back"
+              android:layout_width="40dp"
+              android:layout_height="40dp"
+              android:background="?attr/selectableItemBackgroundBorderless"
+              android:contentDescription="@string/settings_back"
+              android:padding="6dp"
+              android:src="@android:drawable/ic_menu_revert"
+              android:tint="@color/xemu_green" />
+
+            <TextView
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="12dp"
+              android:layout_weight="1"
+              android:text="@string/settings_title"
+              android:textAppearance="@style/TextAppearance.Material3.HeadlineMedium" />
+          </LinearLayout>
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <!-- GPU Driver Section -->
+      <com.google.android.material.card.MaterialCardView
+        android:id="@+id/card_gpu_driver"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:cardBackgroundColor="@color/xemu_surface"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="8dp"
+        app:strokeColor="@color/xemu_outline_variant"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="vertical"
+          android:padding="24dp">
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_gpu_driver_title"
+            android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_gpu_driver_desc"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:id="@+id/settings_gpu_driver_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/setup_wizard_path_background"
+            android:text="@string/settings_gpu_driver_system"
+            android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:id="@+id/settings_gpu_not_supported"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/settings_gpu_driver_not_supported"
+            android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+            android:textColor="#FFAB91"
+            android:visibility="gone" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_install_driver"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/settings_gpu_driver_install"
+            app:icon="@android:drawable/stat_sys_download"
+            app:iconGravity="textStart"
+            app:iconPadding="8dp" />
+
+          <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_select_driver"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_marginEnd="4dp"
+              android:layout_weight="1"
+              android:text="@string/settings_gpu_driver_select"
+              app:icon="@android:drawable/ic_menu_manage"
+              app:iconGravity="textStart"
+              app:iconPadding="8dp" />
+
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_reset_driver"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_weight="1"
+              android:text="@string/settings_gpu_driver_reset"
+              app:icon="@android:drawable/ic_menu_delete"
+              app:iconGravity="textStart"
+              app:iconPadding="8dp" />
+          </LinearLayout>
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <!-- Display Section -->
+      <com.google.android.material.card.MaterialCardView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:cardBackgroundColor="@color/xemu_surface"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="8dp"
+        app:strokeColor="@color/xemu_outline_variant"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="vertical"
+          android:padding="24dp">
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_display_title"
+            android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_show_fps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_show_fps"
+            android:textColor="@color/xemu_text_muted" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+    </LinearLayout>
+  </androidx.core.widget.NestedScrollView>
+</androidx.constraintlayout.widget.ConstraintLayout>

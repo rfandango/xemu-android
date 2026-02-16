@@ -53,6 +53,17 @@
               android:textAppearance="@style/TextAppearance.Material3.HeadlineMedium" />
 
             <ImageButton
+              android:id="@+id/btn_library_settings"
+              android:layout_width="40dp"
+              android:layout_height="40dp"
+              android:layout_marginEnd="4dp"
+              android:background="?attr/selectableItemBackgroundBorderless"
+              android:contentDescription="@string/settings_button_desc"
+              android:padding="6dp"
+              android:src="@android:drawable/ic_menu_preferences"
+              android:tint="@color/xemu_green" />
+
+            <ImageButton
               android:id="@+id/btn_library_about"
               android:layout_width="40dp"
               android:layout_height="40dp"

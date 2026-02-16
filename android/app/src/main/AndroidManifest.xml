@@ -43,5 +43,10 @@
       android:screenOrientation="fullSensor"
       android:exported="false" />
 
+    <activity
+      android:name=".SettingsActivity"
+      android:screenOrientation="fullSensor"
+      android:exported="false" />
+
   </application>
 </manifest>

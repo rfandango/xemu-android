@@ -71,4 +71,27 @@
   <string name="library_about_url_fork" translatable="false">https://github.com/xemu-project/xemu</string>
   <string name="library_about_url_license" translatable="false">https://github.com/izzy2lost/xemu/blob/master/LICENSE</string>
   <string name="library_about_url_disclaimer" translatable="false">https://github.com/izzy2lost/xemu/blob/master/COPYING</string>
+
+  <string name="settings_title">Settings</string>
+  <string name="settings_back">Back</string>
+  <string name="settings_button_desc">Settings</string>
+
+  <string name="settings_gpu_driver_title">GPU Driver</string>
+  <string name="settings_gpu_driver_desc">Use a custom Vulkan driver for potentially better performance or compatibility on Adreno devices.</string>
+  <string name="settings_gpu_driver_system">Active driver: System default</string>
+  <string name="settings_gpu_driver_active">Active driver: %1$s</string>
+  <string name="settings_gpu_driver_not_supported">Custom GPU driver loading is not supported on this device.</string>
+  <string name="settings_gpu_driver_install">Install Driver from ZIP</string>
+  <string name="settings_gpu_driver_select">Select Driver</string>
+  <string name="settings_gpu_driver_select_title">Select a GPU Driver</string>
+  <string name="settings_gpu_driver_reset">Use System Driver</string>
+  <string name="settings_gpu_driver_reset_title">Reset GPU Driver</string>
+  <string name="settings_gpu_driver_reset_message">Revert to the system default GPU driver? The app will use the change on next launch.</string>
+  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_installed">Driver installed successfully. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_install_failed">Failed to install driver. The ZIP may be invalid or incompatible.</string>
+  <string name="settings_gpu_driver_none_available">No driver ZIPs found. Use \"Install Driver from ZIP\" to add one first.</string>
+
+  <string name="settings_display_title">Display</string>
+  <string name="settings_show_fps">Show FPS counter</string>
 </resources>

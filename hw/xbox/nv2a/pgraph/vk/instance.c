@@ -154,7 +154,19 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
     PGRAPHVkState *r = pg->vk_renderer_state;
     VkResult result;
 
+#ifdef __ANDROID__
+    /* Try to use a custom Vulkan driver loaded via adrenotools */
+    extern PFN_vkGetInstanceProcAddr xemu_android_get_vk_proc_addr(void);
+    PFN_vkGetInstanceProcAddr custom_proc = xemu_android_get_vk_proc_addr();
+    if (custom_proc) {
+        volkInitializeCustom(custom_proc);
+        result = VK_SUCCESS;
+    } else {
+        result = volkInitialize();
+    }
+#else
     result = volkInitialize();
+#endif
     if (result != VK_SUCCESS) {
         error_setg(errp, "volkInitialize failed");
         return false;
@@ -647,6 +659,13 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
     };
 
     uint32_t device_api_version = r->device_props.apiVersion;
+
+    /* Clamp to VK_API_VERSION_1_3 -- VMA may be compiled without 1.4
+     * header support and will assert if given a higher version. xemu only
+     * requires Vulkan 1.1 features anyway. */
+    if (device_api_version > VK_API_VERSION_1_3) {
+        device_api_version = VK_API_VERSION_1_3;
+    }
 
     if (device_api_version >= VK_API_VERSION_1_3) {
         vulkanFunctions.vkGetDeviceBufferMemoryRequirements =

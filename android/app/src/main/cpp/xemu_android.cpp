@@ -19,9 +19,27 @@
 #include <vector>
 #include <sys/stat.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "xemu-settings.h"
 #include "hw/xbox/nv2a/debug.h"
+
+#ifdef CONFIG_VULKAN
+#include <adrenotools/driver.h>
+#include <dlfcn.h>
+#include <volk.h>
+
+static void* g_custom_vulkan_library = nullptr;
+
+extern "C" PFN_vkGetInstanceProcAddr xemu_android_get_vk_proc_addr(void)
+{
+    if (!g_custom_vulkan_library) {
+        return nullptr;
+    }
+    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+        dlsym(g_custom_vulkan_library, "vkGetInstanceProcAddr"));
+}
+#endif
 
 namespace {
 constexpr const char* kLogTag = "xemu-android";
@@ -749,3 +767,55 @@ Java_com_izzy2lost_x1box_MainActivity_nativeGetFps(JNIEnv *, jobject)
 {
     return static_cast<jint>(g_nv2a_stats.increment_fps);
 }
+
+#ifdef CONFIG_VULKAN
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_izzy2lost_x1box_GpuDriverHelper_nativeSupportsCustomDriverLoading(JNIEnv *, jclass)
+{
+    return access("/dev/kgsl-3d0", F_OK) == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_izzy2lost_x1box_GpuDriverHelper_nativeInitializeDriver(
+    JNIEnv *env, jclass,
+    jstring hookLibDir, jstring customDriverDir,
+    jstring customDriverName)
+{
+    const char *hook_dir = hookLibDir ? env->GetStringUTFChars(hookLibDir, nullptr) : nullptr;
+    const char *driver_dir = customDriverDir ? env->GetStringUTFChars(customDriverDir, nullptr) : nullptr;
+    const char *driver_name = customDriverName ? env->GetStringUTFChars(customDriverName, nullptr) : nullptr;
+
+    void *handle = nullptr;
+
+    if (driver_name && driver_name[0] != '\0') {
+        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                            "Loading custom Vulkan driver: %s from %s",
+                            driver_name, driver_dir ? driver_dir : "(null)");
+        handle = adrenotools_open_libvulkan(
+            RTLD_NOW,
+            ADRENOTOOLS_DRIVER_CUSTOM,
+            nullptr,
+            hook_dir,
+            driver_dir,
+            driver_name,
+            nullptr,
+            nullptr);
+
+        if (handle) {
+            g_custom_vulkan_library = handle;
+            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                "Custom Vulkan driver loaded successfully via adrenotools");
+        } else {
+            __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+                                "adrenotools failed to load custom driver, will fall back to system default");
+        }
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                            "No custom driver specified, using system Vulkan driver");
+    }
+
+    if (driver_name) env->ReleaseStringUTFChars(customDriverName, driver_name);
+    if (driver_dir) env->ReleaseStringUTFChars(customDriverDir, driver_dir);
+    if (hook_dir) env->ReleaseStringUTFChars(hookLibDir, hook_dir);
+}
+#endif

@@ -25,6 +25,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var inputManager: InputManager? = null
   private var hasPhysicalController = false
 
+  private val prefs by lazy { getSharedPreferences("x1box_prefs", MODE_PRIVATE) }
   private var fpsTextView: TextView? = null
   private val fpsHandler = Handler(Looper.getMainLooper())
   private val fpsUpdateInterval = 500L
@@ -37,6 +38,26 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   private external fun nativeGetFps(): Int
+
+  override fun loadLibraries() {
+    super.loadLibraries()
+    initializeGpuDriver()
+  }
+
+  private fun initializeGpuDriver() {
+    GpuDriverHelper.init(this)
+    if (GpuDriverHelper.supportsCustomDriverLoading()) {
+      val driverLib = GpuDriverHelper.getInstalledDriverLibrary()
+      if (driverLib != null) {
+        android.util.Log.i("MainActivity", "GPU driver: loading custom driver=$driverLib")
+        GpuDriverHelper.initializeDriver(driverLib)
+      } else {
+        android.util.Log.i("MainActivity", "GPU driver: no custom driver installed, using system default")
+      }
+    } else {
+      android.util.Log.i("MainActivity", "GPU driver: custom loading not supported on this device")
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -117,13 +138,17 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   override fun onResume() {
     super.onResume()
     
-    // Register virtual controller after SDL is initialized
-    // Use a delay to ensure SDL is fully ready
     mLayout?.postDelayed({
       registerVirtualController()
     }, 1000)
 
-    fpsHandler.postDelayed(fpsRunnable, fpsUpdateInterval)
+    val showFps = prefs.getBoolean("show_fps", true)
+    fpsTextView?.visibility = if (showFps) View.VISIBLE else View.GONE
+    if (showFps) {
+      fpsHandler.postDelayed(fpsRunnable, fpsUpdateInterval)
+    } else {
+      fpsHandler.removeCallbacks(fpsRunnable)
+    }
   }
 
   override fun onPause() {
