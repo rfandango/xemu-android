@@ -1713,6 +1713,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
                             (int)runstate_get());
     }
 #endif
+    bool did_hw_update = false;
     if (tex == 0) {
 #ifdef __ANDROID__
         // Ensure the software VGA path updates the surface before uploading.
@@ -1721,6 +1722,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         graphic_hw_update(scon->dcl.con);
         bql_unlock();
         qemu_mutex_unlock_main_loop();
+        did_hw_update = true;
 #endif
         // FIXME: Don't upload if notdirty
         xb_surface_gl_create_texture(scon->surface);
@@ -1777,14 +1779,18 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 #endif
 
     /* VGA update (see note above) + vblank */
-    qemu_mutex_lock_main_loop();
-    bql_lock();
-    graphic_hw_update(scon->dcl.con);
-    if (scon->updates && scon->surface) {
+    if (!did_hw_update) {
+        qemu_mutex_lock_main_loop();
+        bql_lock();
+        graphic_hw_update(scon->dcl.con);
+        if (scon->updates && scon->surface) {
+            scon->updates = 0;
+        }
+        bql_unlock();
+        qemu_mutex_unlock_main_loop();
+    } else if (scon->updates && scon->surface) {
         scon->updates = 0;
     }
-    bql_unlock();
-    qemu_mutex_unlock_main_loop();
 
     /*
      * Throttle to make sure swaps happen at 60Hz
