@@ -1,14 +1,21 @@
 package com.izzy2lost.x1box
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.TypedValue
 import android.view.InputDevice
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.FrameLayout
+import android.widget.RelativeLayout
+import android.widget.TextView
 import org.libsdl.app.SDLActivity
 
 class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
@@ -18,9 +25,23 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var inputManager: InputManager? = null
   private var hasPhysicalController = false
 
+  private var fpsTextView: TextView? = null
+  private val fpsHandler = Handler(Looper.getMainLooper())
+  private val fpsUpdateInterval = 500L
+  private val fpsRunnable = object : Runnable {
+    override fun run() {
+      val currentFps = nativeGetFps()
+      fpsTextView?.text = "FPS: $currentFps"
+      fpsHandler.postDelayed(this, fpsUpdateInterval)
+    }
+  }
+
+  private external fun nativeGetFps(): Int
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setupOnScreenController()
+    setupFpsOverlay()
     setupControllerDetection()
     hideSystemUI()
   }
@@ -54,6 +75,25 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     }
   }
 
+  private fun setupFpsOverlay() {
+    fpsTextView = TextView(this).apply {
+      text = "FPS: --"
+      setTextColor(Color.WHITE)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+      typeface = Typeface.MONOSPACE
+      setShadowLayer(2f, 1f, 1f, Color.BLACK)
+      setPadding(16, 8, 16, 8)
+    }
+    val params = RelativeLayout.LayoutParams(
+      RelativeLayout.LayoutParams.WRAP_CONTENT,
+      RelativeLayout.LayoutParams.WRAP_CONTENT
+    ).apply {
+      addRule(RelativeLayout.ALIGN_PARENT_TOP)
+      addRule(RelativeLayout.ALIGN_PARENT_START)
+    }
+    mLayout?.addView(fpsTextView, params)
+  }
+
   private fun setupOnScreenController() {
     // Create on-screen controller
     onScreenController = OnScreenController(this).apply {
@@ -82,6 +122,13 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     mLayout?.postDelayed({
       registerVirtualController()
     }, 1000)
+
+    fpsHandler.postDelayed(fpsRunnable, fpsUpdateInterval)
+  }
+
+  override fun onPause() {
+    fpsHandler.removeCallbacks(fpsRunnable)
+    super.onPause()
   }
 
   private fun registerVirtualController() {
@@ -164,6 +211,8 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   override fun onDestroy() {
+    fpsHandler.removeCallbacks(fpsRunnable)
+
     // Unregister virtual controller
     try {
       org.libsdl.app.SDLControllerManager.nativeRemoveJoystick(-2)

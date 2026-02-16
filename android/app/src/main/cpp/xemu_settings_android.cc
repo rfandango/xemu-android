@@ -72,10 +72,10 @@ static void xemu_settings_apply_defaults(void)
     g_config.display.window.fullscreen_on_startup = false;
     g_config.display.window.fullscreen_exclusive = false;
     g_config.display.window.startup_size =
-        CONFIG_DISPLAY_WINDOW_STARTUP_SIZE_1280X960;
+        CONFIG_DISPLAY_WINDOW_STARTUP_SIZE_1280X720;
     g_config.display.window.last_width = 640;
     g_config.display.window.last_height = 480;
-    g_config.display.window.vsync = false;
+    g_config.display.window.vsync = true;
     g_config.display.ui.show_menubar = true;
     g_config.display.ui.show_notifications = true;
     g_config.display.ui.hide_cursor = true;

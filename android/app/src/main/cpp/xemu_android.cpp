@@ -21,6 +21,7 @@
 #include <errno.h>
 
 #include "xemu-settings.h"
+#include "hw/xbox/nv2a/debug.h"
 
 namespace {
 constexpr const char* kLogTag = "xemu-android";
@@ -741,4 +742,10 @@ extern "C" int SDL_main(int argc, char* argv[]) {
   SDL_DestroyWindow(window);
   SDL_Quit();
   return 0;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_izzy2lost_x1box_MainActivity_nativeGetFps(JNIEnv *, jobject)
+{
+    return static_cast<jint>(g_nv2a_stats.increment_fps);
 }
