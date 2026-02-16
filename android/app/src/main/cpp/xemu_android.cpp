@@ -176,7 +176,7 @@ static const char* GetTcgThreadFromEnv() {
 }
 
 static int GetTcgTbSizeFromEnv() {
-  constexpr int kDefaultTbSize = 128;
+  constexpr int kDefaultTbSize = 256;
   constexpr int kMinTbSize = 32;
   constexpr int kMaxTbSize = 512;
 
@@ -550,6 +550,12 @@ static int SDLCALL QemuThreadMain(void* data) {
   return xemu_android_main(ctx->argc, ctx->argv);
 }
 
+extern "C" void tb_cache_save(const char *path, uint32_t game_hash);
+extern "C" int  tb_cache_load(const char *path, uint32_t game_hash);
+extern "C" uint32_t tb_cache_compute_game_hash(const char *bootrom_path,
+                                               const char *flashrom_path);
+extern "C" void tb_cache_cleanup(void);
+
 extern "C" int xemu_android_main(int argc, char** argv) {
   if (!qemu_main) {
     LogError("xemu core not linked; qemu_main missing");
@@ -557,9 +563,37 @@ extern "C" int xemu_android_main(int argc, char** argv) {
   }
   LogInfo("xemu_android_main: qemu_init");
   qemu_init(argc, argv);
+
+  /* Load translation block cache hints for pre-warming */
+  const char *storage_load = SDL_AndroidGetInternalStoragePath();
+  if (storage_load) {
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path), "%s/x1box/tb_cache.bin", storage_load);
+    uint32_t game_hash = tb_cache_compute_game_hash(
+        g_config.sys.files.bootrom_path, g_config.sys.files.flashrom_path);
+    int nhints = tb_cache_load(cache_path, game_hash);
+    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                        "TB cache: loaded %d hints from %s", nhints, cache_path);
+  }
+
   LogInfo("xemu_android_main: qemu_main");
   int rc = qemu_main();
   LogErrorInt("xemu_android_main: qemu_main returned %d", rc);
+
+  /* Save translation block cache hints for next launch */
+  const char *storage = SDL_AndroidGetInternalStoragePath();
+  if (storage) {
+    char dir_path[PATH_MAX];
+    snprintf(dir_path, sizeof(dir_path), "%s/x1box", storage);
+    mkdir(dir_path, 0755);
+    char cache_path[PATH_MAX];
+    snprintf(cache_path, sizeof(cache_path), "%s/tb_cache.bin", dir_path);
+    uint32_t game_hash = tb_cache_compute_game_hash(
+        g_config.sys.files.bootrom_path, g_config.sys.files.flashrom_path);
+    tb_cache_save(cache_path, game_hash);
+  }
+  tb_cache_cleanup();
+
   return rc;
 }
 
@@ -766,6 +800,14 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_izzy2lost_x1box_MainActivity_nativeGetFps(JNIEnv *, jobject)
 {
     return static_cast<jint>(g_nv2a_stats.increment_fps);
+}
+
+extern "C" char g_vulkan_driver_info[256];
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_izzy2lost_x1box_MainActivity_nativeGetDriverInfo(JNIEnv *env, jobject)
+{
+    return env->NewStringUTF(g_vulkan_driver_info);
 }
 
 #ifdef CONFIG_VULKAN

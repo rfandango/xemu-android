@@ -32,6 +32,9 @@
 
 static bool enable_validation = false;
 
+/* Filled during select_physical_device for display in the Android overlay. */
+char g_vulkan_driver_info[256] = "Vulkan: initializing...";
+
 static char const *const validation_layers[] = {
     "VK_LAYER_KHRONOS_validation",
 };
@@ -431,16 +434,87 @@ static bool select_physical_device(PGRAPHState *pg, Error **errp)
     xemu_settings_set_string(&g_config.display.vulkan.preferred_physical_device,
                              r->device_props.deviceName);
 
-    fprintf(stderr,
-            "Selected physical device: %s\n"
-            "- Vendor: %x, Device: %x\n"
-            "- Driver Version: %d.%d.%d\n",
-            r->device_props.deviceName,
-            r->device_props.vendorID,
-            r->device_props.deviceID,
-            VK_VERSION_MAJOR(r->device_props.driverVersion),
-            VK_VERSION_MINOR(r->device_props.driverVersion),
-            VK_VERSION_PATCH(r->device_props.driverVersion));
+    /*
+     * Query extended driver properties (Vulkan 1.2+) to get the actual
+     * driver name and conformance info.  This is especially useful on
+     * Android where custom GPU drivers (e.g. Turnip) can be injected
+     * at runtime via adrenotools.
+     */
+    if (r->device_props.apiVersion >= VK_API_VERSION_1_2) {
+        VkPhysicalDeviceDriverProperties drv;
+        memset(&drv, 0, sizeof(drv));
+        drv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        VkPhysicalDeviceProperties2 props2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &drv,
+        };
+        vkGetPhysicalDeviceProperties2(r->physical_device, &props2);
+
+        fprintf(stderr,
+                "Selected physical device: %s\n"
+                "- Vendor: %04x, Device: %04x\n"
+                "- API Version: %d.%d.%d\n"
+                "- Driver: %s (%s)\n"
+                "- Driver Version: %d.%d.%d\n",
+                r->device_props.deviceName,
+                r->device_props.vendorID,
+                r->device_props.deviceID,
+                VK_VERSION_MAJOR(r->device_props.apiVersion),
+                VK_VERSION_MINOR(r->device_props.apiVersion),
+                VK_VERSION_PATCH(r->device_props.apiVersion),
+                drv.driverName, drv.driverInfo,
+                VK_VERSION_MAJOR(r->device_props.driverVersion),
+                VK_VERSION_MINOR(r->device_props.driverVersion),
+                VK_VERSION_PATCH(r->device_props.driverVersion));
+
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vulkan",
+                            "GPU: %s | Driver: %s (%s) | "
+                            "Vendor: %04x Device: %04x | "
+                            "API: %d.%d.%d | DriverVer: %d.%d.%d",
+                            r->device_props.deviceName,
+                            drv.driverName, drv.driverInfo,
+                            r->device_props.vendorID,
+                            r->device_props.deviceID,
+                            VK_VERSION_MAJOR(r->device_props.apiVersion),
+                            VK_VERSION_MINOR(r->device_props.apiVersion),
+                            VK_VERSION_PATCH(r->device_props.apiVersion),
+                            VK_VERSION_MAJOR(r->device_props.driverVersion),
+                            VK_VERSION_MINOR(r->device_props.driverVersion),
+                            VK_VERSION_PATCH(r->device_props.driverVersion));
+#endif
+        snprintf(g_vulkan_driver_info, sizeof(g_vulkan_driver_info),
+                 "%s (%s)", drv.driverName, drv.driverInfo);
+    } else {
+        fprintf(stderr,
+                "Selected physical device: %s\n"
+                "- Vendor: %04x, Device: %04x\n"
+                "- Driver Version: %d.%d.%d\n",
+                r->device_props.deviceName,
+                r->device_props.vendorID,
+                r->device_props.deviceID,
+                VK_VERSION_MAJOR(r->device_props.driverVersion),
+                VK_VERSION_MINOR(r->device_props.driverVersion),
+                VK_VERSION_PATCH(r->device_props.driverVersion));
+
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vulkan",
+                            "GPU: %s | Vendor: %04x Device: %04x | "
+                            "DriverVer: %d.%d.%d (Vulkan <1.2, no driver name)",
+                            r->device_props.deviceName,
+                            r->device_props.vendorID,
+                            r->device_props.deviceID,
+                            VK_VERSION_MAJOR(r->device_props.driverVersion),
+                            VK_VERSION_MINOR(r->device_props.driverVersion),
+                            VK_VERSION_PATCH(r->device_props.driverVersion));
+#endif
+        snprintf(g_vulkan_driver_info, sizeof(g_vulkan_driver_info),
+                 "%s (v%d.%d.%d)",
+                 r->device_props.deviceName,
+                 VK_VERSION_MAJOR(r->device_props.driverVersion),
+                 VK_VERSION_MINOR(r->device_props.driverVersion),
+                 VK_VERSION_PATCH(r->device_props.driverVersion));
+    }
 
     return true;
 }

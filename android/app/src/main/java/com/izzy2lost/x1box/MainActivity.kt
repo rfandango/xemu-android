@@ -29,15 +29,30 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var fpsTextView: TextView? = null
   private val fpsHandler = Handler(Looper.getMainLooper())
   private val fpsUpdateInterval = 500L
+  private var driverInfoStr = ""
+
   private val fpsRunnable = object : Runnable {
     override fun run() {
       val currentFps = nativeGetFps()
-      fpsTextView?.text = "FPS: $currentFps"
+      if (driverInfoStr.isEmpty() || driverInfoStr.contains("initializing")) {
+        try {
+          val info = nativeGetDriverInfo()
+          if (!info.contains("initializing")) {
+            driverInfoStr = info
+          }
+        } catch (_: Exception) {}
+      }
+      if (driverInfoStr.isNotEmpty()) {
+        fpsTextView?.text = "FPS: $currentFps | $driverInfoStr"
+      } else {
+        fpsTextView?.text = "FPS: $currentFps"
+      }
       fpsHandler.postDelayed(this, fpsUpdateInterval)
     }
   }
 
   private external fun nativeGetFps(): Int
+  private external fun nativeGetDriverInfo(): String
 
   override fun loadLibraries() {
     super.loadLibraries()

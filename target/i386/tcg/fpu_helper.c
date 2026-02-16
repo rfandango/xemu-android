@@ -73,6 +73,169 @@
 #define floatx80_ln2_d make_floatx80(0x3ffe, 0xb17217f7d1cf79abLL)
 #define floatx80_pi_d make_floatx80(0x4000, 0xc90fdaa22168c234LL)
 
+/*
+ * ARM64 hard FPU: convert floatx80 <-> double via inline bit manipulation,
+ * then use the native ARM64 double-precision FPU for arithmetic.
+ *
+ * On ARM64 we compile fpu_helper.c once (no dual soft/hard compilation),
+ * so we just redirect the floatx80_* math macros to native double-precision
+ * implementations.  Helper function names are NOT renamed -- they keep
+ * their normal undecorated symbols.
+ */
+#if defined(XBOX) && defined(__aarch64__)
+
+#include <string.h>
+
+static inline double fx80_to_f64(floatx80 a)
+{
+    uint64_t mant = a.low;
+    uint16_t exp_sign = a.high;
+    int sign = (exp_sign >> 15) & 1;
+    int exp = exp_sign & 0x7FFF;
+
+    if (exp == 0x7FFF) {
+        /* Infinity or NaN */
+        uint64_t d_bits = ((uint64_t)sign << 63) | (UINT64_C(0x7FF) << 52);
+        if (mant & UINT64_C(0x7FFFFFFFFFFFFFFF)) {
+            d_bits |= UINT64_C(0x8000000000000); /* quiet NaN */
+        }
+        double d;
+        memcpy(&d, &d_bits, sizeof(d));
+        return d;
+    }
+
+    if (exp == 0 || !(mant & UINT64_C(0x8000000000000000))) {
+        /* Zero or denormal -- treat as zero (sufficient for Xbox games) */
+        return sign ? -0.0 : 0.0;
+    }
+
+    /* Normal: rebias exponent from 16383 to 1023 */
+    int d_exp = exp - 16383 + 1023;
+    if (d_exp >= 0x7FF) {
+        return sign ? -INFINITY : INFINITY;
+    }
+    if (d_exp <= 0) {
+        return sign ? -0.0 : 0.0;
+    }
+
+    /* Drop explicit integer bit, take top 52 bits of remaining 63 */
+    uint64_t d_mant = (mant & UINT64_C(0x7FFFFFFFFFFFFFFF)) >> 11;
+    uint64_t d_bits = ((uint64_t)sign << 63) | ((uint64_t)d_exp << 52) | d_mant;
+    double d;
+    memcpy(&d, &d_bits, sizeof(d));
+    return d;
+}
+
+static inline floatx80 f64_to_fx80(double d)
+{
+    uint64_t d_bits;
+    memcpy(&d_bits, &d, sizeof(d_bits));
+    int sign = (d_bits >> 63) & 1;
+    int d_exp = (d_bits >> 52) & 0x7FF;
+    uint64_t d_mant = d_bits & UINT64_C(0xFFFFFFFFFFFFF);
+
+    if (d_exp == 0x7FF) {
+        /* Infinity or NaN */
+        uint64_t low = UINT64_C(0x8000000000000000);
+        if (d_mant) {
+            low |= (d_mant << 11) | UINT64_C(0x4000000000000000);
+        }
+        return make_floatx80((sign << 15) | 0x7FFF, low);
+    }
+
+    if (d_exp == 0) {
+        if (d_mant == 0) {
+            return make_floatx80((uint16_t)(sign << 15), 0);
+        }
+        /* Denormal double -- flush to zero for simplicity */
+        return make_floatx80((uint16_t)(sign << 15), 0);
+    }
+
+    /* Normal: rebias exponent from 1023 to 16383, add explicit integer bit */
+    int x_exp = d_exp - 1023 + 16383;
+    uint64_t low = UINT64_C(0x8000000000000000) | (d_mant << 11);
+    return make_floatx80((sign << 15) | x_exp, low);
+}
+
+static inline floatx80 pack_arm64(floatx80 v, float_status *status)
+{
+    switch (status->floatx80_rounding_precision) {
+    case floatx80_precision_s: {
+        float f = (float)fx80_to_f64(v);
+        return f64_to_fx80((double)f);
+    }
+    case floatx80_precision_d:
+    default:
+        return v; /* already at double precision */
+    }
+}
+
+#define floatx80_add(a, b, s)          pack_arm64(f64_to_fx80(fx80_to_f64(a) + fx80_to_f64(b)), s)
+#define floatx80_sub(a, b, s)          pack_arm64(f64_to_fx80(fx80_to_f64(a) - fx80_to_f64(b)), s)
+#define floatx80_mul(a, b, s)          pack_arm64(f64_to_fx80(fx80_to_f64(a) * fx80_to_f64(b)), s)
+#define floatx80_div(a, b, s)          pack_arm64(f64_to_fx80(fx80_to_f64(a) / fx80_to_f64(b)), s)
+
+static inline
+FloatRelation floatx80_compare_arm64(floatx80 a, floatx80 b, float_status *status)
+{
+    double da = fx80_to_f64(a);
+    double db = fx80_to_f64(b);
+    if (da < db) return float_relation_less;
+    if (da > db) return float_relation_greater;
+    if (da == db) return float_relation_equal;
+    return float_relation_unordered;
+}
+#define floatx80_compare      floatx80_compare_arm64
+
+static inline floatx80 float32_to_floatx80_arm64(float32 val, float_status *s)
+{
+    union { float32 i; float f; } u;
+    u.i = val;
+    return f64_to_fx80((double)u.f);
+}
+#define float32_to_floatx80   float32_to_floatx80_arm64
+
+static inline float32 floatx80_to_float32_arm64(floatx80 a, float_status *s)
+{
+    union { float f; float32 i; } u;
+    u.f = (float)fx80_to_f64(a);
+    return u.i;
+}
+#define floatx80_to_float32   floatx80_to_float32_arm64
+
+static inline floatx80 float64_to_floatx80_arm64(float64 val, float_status *s)
+{
+    union { float64 i; double d; } u;
+    u.i = val;
+    return f64_to_fx80(u.d);
+}
+#define float64_to_floatx80   float64_to_floatx80_arm64
+
+static inline float64 floatx80_to_float64_arm64(floatx80 a, float_status *s)
+{
+    union { double d; float64 i; } u;
+    u.d = fx80_to_f64(a);
+    return u.i;
+}
+#define floatx80_to_float64   floatx80_to_float64_arm64
+
+static inline floatx80 int32_to_floatx80_arm64(int32_t a, float_status *s)
+{
+    return f64_to_fx80((double)a);
+}
+#define int32_to_floatx80     int32_to_floatx80_arm64
+
+#endif /* XBOX && __aarch64__ */
+
+/*
+ * x86_64 hard FPU: dual-compilation via fpu_helper_hard.c.
+ *
+ * fpu_helper.c is compiled twice on x86_64:
+ *   1) Normally (without USE_HARD_FPU) → produces helper_*__soft symbols
+ *   2) Via fpu_helper_hard.c (with USE_HARD_FPU) → produces helper_*__hard symbols
+ *
+ * The MAP_HELPER_SOFT_HARD macro renames helpers to the appropriate variant.
+ */
 #if defined(XBOX) && defined(__x86_64__)
 #ifdef USE_HARD_FPU
 /*

@@ -22,6 +22,129 @@
 #include "crypto/aes-round.h"
 #include "crypto/clmul.h"
 
+/*
+ * ARM64 native float helpers for SSE operations.
+ *
+ * On ARM64, replace softfloat per-element calls with native FP instructions.
+ * This trades exact IEEE exception tracking for significant performance gains.
+ * Xbox games do not check MXCSR exception flags so this is safe for xemu.
+ */
+#if defined(XBOX) && defined(__aarch64__) && !defined(OPS_SSE_NATIVE_FP_DEFINED)
+#define OPS_SSE_NATIVE_FP_DEFINED
+
+#include <string.h>
+#include <math.h>
+
+static inline float32 float32_add_native(float32 a, float32 b)
+{
+    float fa, fb, fr;
+    memcpy(&fa, &a, sizeof(fa));
+    memcpy(&fb, &b, sizeof(fb));
+    fr = fa + fb;
+    float32 r;
+    memcpy(&r, &fr, sizeof(r));
+    return r;
+}
+
+static inline float32 float32_sub_native(float32 a, float32 b)
+{
+    float fa, fb, fr;
+    memcpy(&fa, &a, sizeof(fa));
+    memcpy(&fb, &b, sizeof(fb));
+    fr = fa - fb;
+    float32 r;
+    memcpy(&r, &fr, sizeof(r));
+    return r;
+}
+
+static inline float32 float32_mul_native(float32 a, float32 b)
+{
+    float fa, fb, fr;
+    memcpy(&fa, &a, sizeof(fa));
+    memcpy(&fb, &b, sizeof(fb));
+    fr = fa * fb;
+    float32 r;
+    memcpy(&r, &fr, sizeof(r));
+    return r;
+}
+
+static inline float32 float32_div_native(float32 a, float32 b)
+{
+    float fa, fb, fr;
+    memcpy(&fa, &a, sizeof(fa));
+    memcpy(&fb, &b, sizeof(fb));
+    fr = fa / fb;
+    float32 r;
+    memcpy(&r, &fr, sizeof(r));
+    return r;
+}
+
+static inline float64 float64_add_native(float64 a, float64 b)
+{
+    double da, db, dr;
+    memcpy(&da, &a, sizeof(da));
+    memcpy(&db, &b, sizeof(db));
+    dr = da + db;
+    float64 r;
+    memcpy(&r, &dr, sizeof(r));
+    return r;
+}
+
+static inline float64 float64_sub_native(float64 a, float64 b)
+{
+    double da, db, dr;
+    memcpy(&da, &a, sizeof(da));
+    memcpy(&db, &b, sizeof(db));
+    dr = da - db;
+    float64 r;
+    memcpy(&r, &dr, sizeof(r));
+    return r;
+}
+
+static inline float64 float64_mul_native(float64 a, float64 b)
+{
+    double da, db, dr;
+    memcpy(&da, &a, sizeof(da));
+    memcpy(&db, &b, sizeof(db));
+    dr = da * db;
+    float64 r;
+    memcpy(&r, &dr, sizeof(r));
+    return r;
+}
+
+static inline float64 float64_div_native(float64 a, float64 b)
+{
+    double da, db, dr;
+    memcpy(&da, &a, sizeof(da));
+    memcpy(&db, &b, sizeof(db));
+    dr = da / db;
+    float64 r;
+    memcpy(&r, &dr, sizeof(r));
+    return r;
+}
+
+static inline float32 float32_sqrt_native(float32 a)
+{
+    float fa, fr;
+    memcpy(&fa, &a, sizeof(fa));
+    fr = sqrtf(fa);
+    float32 r;
+    memcpy(&r, &fr, sizeof(r));
+    return r;
+}
+
+static inline float64 float64_sqrt_native(float64 a)
+{
+    double da, dr;
+    memcpy(&da, &a, sizeof(da));
+    dr = sqrt(da);
+    float64 r;
+    memcpy(&r, &dr, sizeof(r));
+    return r;
+}
+
+#endif /* XBOX && __aarch64__ && !OPS_SSE_NATIVE_FP_DEFINED */
+
 #if SHIFT == 0
 #define Reg MMXReg
 #define XMM_ONLY(...)
@@ -511,10 +634,17 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
 
 #endif
 
+#if defined(XBOX) && defined(__aarch64__)
+#define FPU_ADD(size, a, b) float ## size ## _add_native(a, b)
+#define FPU_SUB(size, a, b) float ## size ## _sub_native(a, b)
+#define FPU_MUL(size, a, b) float ## size ## _mul_native(a, b)
+#define FPU_DIV(size, a, b) float ## size ## _div_native(a, b)
+#else
 #define FPU_ADD(size, a, b) float ## size ## _add(a, b, &env->sse_status)
 #define FPU_SUB(size, a, b) float ## size ## _sub(a, b, &env->sse_status)
 #define FPU_MUL(size, a, b) float ## size ## _mul(a, b, &env->sse_status)
 #define FPU_DIV(size, a, b) float ## size ## _div(a, b, &env->sse_status)
+#endif
 
 /* Note that the choice of comparison op here is important to get the
  * special cases right: for min and max Intel specifies that (-0,0),
@@ -536,7 +666,11 @@ void glue(helper_sqrtps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
     for (i = 0; i < 2 << SHIFT; i++) {
+#if defined(XBOX) && defined(__aarch64__)
+        d->ZMM_S(i) = float32_sqrt_native(s->ZMM_S(i));
+#else
         d->ZMM_S(i) = float32_sqrt(s->ZMM_S(i), &env->sse_status);
+#endif
     }
 }
 
@@ -544,7 +678,11 @@ void glue(helper_sqrtpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
     for (i = 0; i < 1 << SHIFT; i++) {
+#if defined(XBOX) && defined(__aarch64__)
+        d->ZMM_D(i) = float64_sqrt_native(s->ZMM_D(i));
+#else
         d->ZMM_D(i) = float64_sqrt(s->ZMM_D(i), &env->sse_status);
+#endif
     }
 }
 
@@ -552,7 +690,11 @@ void glue(helper_sqrtpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 void helper_sqrtss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     int i;
+#if defined(XBOX) && defined(__aarch64__)
+    d->ZMM_S(0) = float32_sqrt_native(s->ZMM_S(0));
+#else
     d->ZMM_S(0) = float32_sqrt(s->ZMM_S(0), &env->sse_status);
+#endif
     for (i = 1; i < 2 << SHIFT; i++) {
         d->ZMM_L(i) = v->ZMM_L(i);
     }
@@ -561,7 +703,11 @@ void helper_sqrtss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 void helper_sqrtsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     int i;
+#if defined(XBOX) && defined(__aarch64__)
+    d->ZMM_D(0) = float64_sqrt_native(s->ZMM_D(0));
+#else
     d->ZMM_D(0) = float64_sqrt(s->ZMM_D(0), &env->sse_status);
+#endif
     for (i = 1; i < 1 << SHIFT; i++) {
         d->ZMM_Q(i) = v->ZMM_Q(i);
     }

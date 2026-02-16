@@ -47,6 +47,7 @@
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#include "tb-cache-hints.h"
 
 /* -icount align implementation. */
 
@@ -990,6 +991,9 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 CPUJumpCache *jc;
                 uint32_t h;
 
+                tb_cache_notify_lookup_miss();
+                tb_cache_maybe_log_stats();
+
                 mmap_lock();
                 tb = tb_gen_code(cpu, s);
                 mmap_unlock();
@@ -1002,6 +1006,8 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 jc = cpu->tb_jmp_cache;
                 jc->array[h].pc = s.pc;
                 qatomic_set(&jc->array[h].tb, tb);
+            } else {
+                tb_cache_notify_lookup_hit();
             }
 
 #ifndef CONFIG_USER_ONLY
@@ -1044,6 +1050,14 @@ int cpu_exec(CPUState *cpu)
 {
     int ret;
     SyncClocks sc = { 0 };
+
+#ifdef XBOX
+    static bool tb_cache_warmed = false;
+    if (!tb_cache_warmed) {
+        tb_cache_warmed = true;
+        tb_cache_prewarm(cpu);
+    }
+#endif
 
     /* replay_interrupt may need current_cpu */
     current_cpu = cpu;

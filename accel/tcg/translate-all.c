@@ -38,6 +38,7 @@
 #include "internal-common.h"
 #include "tcg/perf.h"
 #include "tcg/insn-start-words.h"
+#include "tb-cache-hints.h"
 
 #if defined(CONFIG_VTUNE_JITPROFILING)
 #include <jitprofiling.h>
@@ -567,6 +568,10 @@ recycle_tb:
         tcg_tb_remove(tb);
         return existing_tb;
     }
+
+#ifdef XBOX
+    tb_cache_record_hint(tb);
+#endif
 
 #if defined(CONFIG_VTUNE_JITPROFILING)
     if (iJIT_IsProfilingActive() == iJIT_SAMPLING_ON && !recycled) {

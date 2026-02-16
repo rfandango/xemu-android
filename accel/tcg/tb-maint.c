@@ -18,6 +18,9 @@
  */
 
 #include "qemu/osdep.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include "qemu/interval-tree.h"
 #include "qemu/qtree.h"
 #include "exec/cputlb.h"
@@ -34,6 +37,7 @@
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#include "tb-cache-hints.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/page-protection.h"
 #define runstate_is_running()  true
@@ -795,6 +799,21 @@ void tb_flush__exclusive_or_serial(void)
     tcg_region_reset_all();
     /* XXX: flush processor icache at this point if cache flush is expensive */
     qatomic_inc(&tb_ctx.tb_flush_count);
+
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_WARN, "tb-cache",
+                        "TB FLUSH #%u -- all translations destroyed",
+                        qatomic_read(&tb_ctx.tb_flush_count));
+#endif
+
+    /*
+     * Re-translate the most important blocks immediately so the
+     * emulator doesn't stutter while rebuilding on demand.
+     */
+    if (current_cpu) {
+        tb_cache_rewarm_after_flush(current_cpu);
+    }
+
     qemu_plugin_flush_cb();
 }
 

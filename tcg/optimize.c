@@ -1580,6 +1580,41 @@ static bool fold_bitsel_vec(OptContext *ctx, TCGOp *op)
 
 static bool fold_brcond(OptContext *ctx, TCGOp *op)
 {
+    /*
+     * Peephole: fuse setcond + brcond.
+     *
+     *   setcond tmp, a, b, cond     brcond tmp, 0, NE, label
+     * becomes:
+     *   brcond a, b, cond, label
+     *
+     *   setcond tmp, a, b, cond     brcond tmp, 0, EQ, label
+     * becomes:
+     *   brcond a, b, inv(cond), label
+     *
+     * This eliminates the intermediate boolean materialization that
+     * the x86 frontend generates for conditional jumps.
+     */
+    TCGOp *prev = QTAILQ_PREV(op, link);
+    if (prev && prev->opc == INDEX_op_setcond
+        && arg_is_const_val(op->args[1], 0)
+        && op->args[0] == prev->args[0]
+        && arg_temp(prev->args[0])->kind < TEMP_GLOBAL) {
+        TCGCond brcond = op->args[2];
+        TCGCond setcond = prev->args[3];
+
+        if (brcond == TCG_COND_NE) {
+            op->args[0] = prev->args[1];
+            op->args[1] = prev->args[2];
+            op->args[2] = setcond;
+            tcg_op_remove(ctx->tcg, prev);
+        } else if (brcond == TCG_COND_EQ) {
+            op->args[0] = prev->args[1];
+            op->args[1] = prev->args[2];
+            op->args[2] = tcg_invert_cond(setcond);
+            tcg_op_remove(ctx->tcg, prev);
+        }
+    }
+
     int i = do_constant_folding_cond1(ctx, op, NO_DEST, &op->args[0],
                                       &op->args[1], &op->args[2]);
     if (i == 0) {
