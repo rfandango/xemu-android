@@ -149,6 +149,7 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
                      vaddr pc, void *host_pc, const TranslatorOps *ops,
                      DisasContextBase *db);
 
+
 /**
  * translator_use_goto_tb
  * @db: Disassembly context

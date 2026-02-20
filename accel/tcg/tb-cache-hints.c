@@ -27,7 +27,7 @@
 /* ------------------------------------------------------------------ */
 
 #define TB_CACHE_MAGIC   0x54424843  /* "TBCH" */
-#define TB_CACHE_VERSION 1
+#define TB_CACHE_VERSION 3
 
 typedef struct TBCacheFileHeader {
     uint32_t magic;
@@ -35,6 +35,27 @@ typedef struct TBCacheFileHeader {
     uint32_t game_hash;
     uint32_t hint_count;
 } TBCacheFileHeader;
+
+/* v1 hint struct for backward-compatible loading of old cache files. */
+typedef struct TBCacheHintV1 {
+    uint64_t pc;
+    uint64_t cs_base;
+    uint32_t flags;
+    uint32_t cflags;
+    uint64_t phys_pc;
+} TBCacheHintV1;
+
+/* v2 hint struct (no superblock fields). */
+typedef struct TBCacheHintV2 {
+    uint64_t pc;
+    uint64_t cs_base;
+    uint32_t flags;
+    uint32_t cflags;
+    uint64_t phys_pc;
+    uint32_t exec_count;
+    uint8_t  tier;
+    uint8_t  pad[3];
+} TBCacheHintV2;
 
 /* ------------------------------------------------------------------ */
 /*  Runtime state                                                      */
@@ -144,15 +165,39 @@ void tb_cache_record_hint(const TranslationBlock *tb)
     }
 
     TBCacheHint h = {
-        .pc      = tb->pc,
-        .cs_base = tb->cs_base,
-        .flags   = tb->flags,
-        .cflags  = tb->cflags & ~(CF_COUNT_MASK | CF_INVALID),
-        .phys_pc = tb_page_addr0(tb),
+        .pc            = tb->pc,
+        .cs_base       = tb->cs_base,
+        .flags         = tb->flags,
+        .cflags        = tb->cflags & ~(CF_COUNT_MASK | CF_INVALID | CF_TIER1 | CF_SUPERBLOCK),
+        .phys_pc       = tb_page_addr0(tb),
+        .exec_count    = tb->exec_count,
+        .tier          = tb->tier,
+        .is_superblock = (tb->superblock != NULL) ? 1 : 0,
+        .pc_b          = (tb->superblock != NULL) ? tb->superblock->pc_b : 0,
     };
 
+    /*
+     * On dedup collision, update exec_count/tier to max so the hottest
+     * observation is preserved across re-translations.
+     */
     if (dedup_contains_or_insert(&h, recorded_count)) {
-        return;  /* already recorded */
+        /* Find the existing hint and update its hotness data. */
+        uint32_t bucket = hint_hash(h.pc, h.flags);
+        for (int probe = 0; probe < 16; probe++) {
+            uint32_t slot = (bucket + probe) & TB_CACHE_HASH_MASK;
+            uint32_t val = dedup_table ? dedup_table[slot] : 0;
+            if (val && hint_eq(&recorded_hints[val - 1], &h)) {
+                TBCacheHint *existing = &recorded_hints[val - 1];
+                if (h.exec_count > existing->exec_count) {
+                    existing->exec_count = h.exec_count;
+                }
+                if (h.tier > existing->tier) {
+                    existing->tier = h.tier;
+                }
+                break;
+            }
+        }
+        return;
     }
 
     /* Grow array if needed. */
@@ -219,9 +264,9 @@ int tb_cache_load(const char *path, uint32_t game_hash)
         qemu_log("tb_cache_load: bad magic in %s\n", path);
         goto fail;
     }
-    if (hdr.version != TB_CACHE_VERSION) {
-        qemu_log("tb_cache_load: version mismatch (%u vs %u) in %s\n",
-                 hdr.version, TB_CACHE_VERSION, path);
+    if (hdr.version < 1 || hdr.version > 3) {
+        qemu_log("tb_cache_load: unsupported version %u in %s\n",
+                 hdr.version, path);
         goto fail;
     }
     if (hdr.game_hash != game_hash) {
@@ -235,20 +280,84 @@ int tb_cache_load(const char *path, uint32_t game_hash)
     }
 
     loaded_hints = g_new(TBCacheHint, hdr.hint_count);
-    if (fread(loaded_hints, sizeof(TBCacheHint),
-              hdr.hint_count, f) != hdr.hint_count) {
-        g_free(loaded_hints);
-        loaded_hints = NULL;
-        goto fail;
+
+    if (hdr.version == 1) {
+        /* Read v1 hints and convert to v3. */
+        TBCacheHintV1 *v1 = g_new(TBCacheHintV1, hdr.hint_count);
+        if (fread(v1, sizeof(TBCacheHintV1),
+                  hdr.hint_count, f) != hdr.hint_count) {
+            g_free(v1);
+            g_free(loaded_hints);
+            loaded_hints = NULL;
+            goto fail;
+        }
+        for (uint32_t i = 0; i < hdr.hint_count; i++) {
+            memset(&loaded_hints[i], 0, sizeof(TBCacheHint));
+            loaded_hints[i].pc         = v1[i].pc;
+            loaded_hints[i].cs_base    = v1[i].cs_base;
+            loaded_hints[i].flags      = v1[i].flags;
+            loaded_hints[i].cflags     = v1[i].cflags;
+            loaded_hints[i].phys_pc    = v1[i].phys_pc;
+        }
+        g_free(v1);
+        qemu_log("tb_cache_load: upgraded %u v1 hints from %s\n",
+                 hdr.hint_count, path);
+    } else if (hdr.version == 2) {
+        /* Read v2 hints (no superblock fields) and convert to v3. */
+        TBCacheHintV2 *v2 = g_new(TBCacheHintV2, hdr.hint_count);
+        if (fread(v2, sizeof(TBCacheHintV2),
+                  hdr.hint_count, f) != hdr.hint_count) {
+            g_free(v2);
+            g_free(loaded_hints);
+            loaded_hints = NULL;
+            goto fail;
+        }
+        for (uint32_t i = 0; i < hdr.hint_count; i++) {
+            memset(&loaded_hints[i], 0, sizeof(TBCacheHint));
+            loaded_hints[i].pc         = v2[i].pc;
+            loaded_hints[i].cs_base    = v2[i].cs_base;
+            loaded_hints[i].flags      = v2[i].flags;
+            loaded_hints[i].cflags     = v2[i].cflags;
+            loaded_hints[i].phys_pc    = v2[i].phys_pc;
+            loaded_hints[i].exec_count = v2[i].exec_count;
+            loaded_hints[i].tier       = v2[i].tier;
+        }
+        g_free(v2);
+        qemu_log("tb_cache_load: upgraded %u v2 hints from %s\n",
+                 hdr.hint_count, path);
+    } else {
+        /* v3: read directly. */
+        if (fread(loaded_hints, sizeof(TBCacheHint),
+                  hdr.hint_count, f) != hdr.hint_count) {
+            g_free(loaded_hints);
+            loaded_hints = NULL;
+            goto fail;
+        }
     }
 
     loaded_count = (int)hdr.hint_count;
     fclose(f);
-    qemu_log("tb_cache_load: loaded %d hints from %s\n", loaded_count, path);
+    qemu_log("tb_cache_load: loaded %d hints (v%u) from %s\n",
+             loaded_count, hdr.version, path);
     return loaded_count;
 
 fail:
     fclose(f);
+    return 0;
+}
+
+/* Comparator: sort Tier 1 hints before Tier 0 for pre-warming priority. */
+static int hint_tier_cmp(const void *a, const void *b)
+{
+    const TBCacheHint *ha = a;
+    const TBCacheHint *hb = b;
+    /* Higher tier first, then higher exec_count first. */
+    if (ha->tier != hb->tier) {
+        return (int)hb->tier - (int)ha->tier;
+    }
+    if (ha->exec_count != hb->exec_count) {
+        return (ha->exec_count > hb->exec_count) ? -1 : 1;
+    }
     return 0;
 }
 
@@ -258,7 +367,11 @@ void tb_cache_prewarm(CPUState *cpu)
         return;
     }
 
+    /* Sort: Tier 1 (hot) hints first, then by exec_count descending. */
+    qsort(loaded_hints, loaded_count, sizeof(TBCacheHint), hint_tier_cmp);
+
     int translated = 0;
+    int tier1_count = 0;
     int skipped = 0;
 
     qemu_log("tb_cache_prewarm: pre-translating %d blocks...\n", loaded_count);
@@ -270,20 +383,21 @@ void tb_cache_prewarm(CPUState *cpu)
             .pc      = (vaddr)h->pc,
             .cs_base = h->cs_base,
             .flags   = h->flags,
-            .cflags  = h->cflags,
+            .cflags  = h->cflags | (h->tier >= 1 ? CF_TIER1 : 0),
         };
 
-        /*
-         * Attempt to translate.  If the physical page isn't mapped yet
-         * or the address is invalid, tb_gen_code will handle it
-         * gracefully (returning a one-shot TB or similar).  We just
-         * ignore errors and move on.
-         */
         mmap_lock();
         TranslationBlock *tb = tb_gen_code(cpu, s);
         mmap_unlock();
 
         if (tb) {
+            if (h->tier >= 1) {
+                /* Strip CF_TIER1 from stored cflags so lookup works. */
+                tb->cflags &= ~CF_TIER1;
+                tb->tier = 1;
+                tb->exec_count = h->exec_count;
+                tier1_count++;
+            }
             translated++;
         } else {
             skipped++;
@@ -292,13 +406,22 @@ void tb_cache_prewarm(CPUState *cpu)
 
     stats_prewarmed_count = translated;
 
-    qemu_log("tb_cache_prewarm: translated %d, skipped %d\n",
-             translated, skipped);
+    qemu_log("tb_cache_prewarm: translated %d (tier1=%d), skipped %d\n",
+             translated, tier1_count, skipped);
 
 #ifdef __ANDROID__
     __android_log_print(ANDROID_LOG_INFO, "tb-cache",
-                        "prewarm: translated %d, skipped %d", translated, skipped);
+                        "prewarm: translated %d (tier1=%d), skipped %d",
+                        translated, tier1_count, skipped);
 #endif
+
+    /*
+     * Note: Superblock hints (is_superblock=1) are not re-formed during
+     * prewarm because the component TBs may not yet have sufficient
+     * chain_count data.  They will be re-formed naturally as the
+     * hot loops re-execute and the tier1_maybe_form_superblock() trigger
+     * fires.  The component TBs (A and B) are already pre-warmed above.
+     */
 
     /* Free loaded hints -- no longer needed. */
     g_free(loaded_hints);
@@ -386,6 +509,7 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
     rewarm_in_progress = true;
 
     int translated = 0;
+    int tier1_count = 0;
     int total = recorded_count;
 
     for (int i = 0; i < total; i++) {
@@ -395,7 +519,7 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
             .pc      = (vaddr)h->pc,
             .cs_base = h->cs_base,
             .flags   = h->flags,
-            .cflags  = h->cflags,
+            .cflags  = h->cflags | (h->tier >= 1 ? CF_TIER1 : 0),
         };
 
         mmap_lock();
@@ -403,14 +527,20 @@ void tb_cache_rewarm_after_flush(CPUState *cpu)
         mmap_unlock();
 
         if (tb) {
+            if (h->tier >= 1) {
+                tb->cflags &= ~CF_TIER1;
+                tb->tier = 1;
+                tb->exec_count = h->exec_count;
+                tier1_count++;
+            }
             translated++;
         }
     }
 
 #ifdef __ANDROID__
     __android_log_print(ANDROID_LOG_INFO, "tb-cache",
-                        "post-flush rewarm: re-translated %d/%d blocks",
-                        translated, total);
+                        "post-flush rewarm: re-translated %d/%d blocks (tier1=%d)",
+                        translated, total, tier1_count);
 #endif
 
     rewarm_in_progress = false;

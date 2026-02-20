@@ -48,6 +48,243 @@
 #include "tb-internal.h"
 #include "internal-common.h"
 #include "tb-cache-hints.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
+/* ------------------------------------------------------------------ */
+/*  Tier 1 promotion mechanism                                         */
+/* ------------------------------------------------------------------ */
+
+#ifdef XBOX
+
+#define TIER1_PROMOTION_BUDGET   8    /* Max promotions per budget window */
+#define TIER1_BUDGET_INTERVAL_MS 10   /* Reset budget every N ms */
+
+static int tier1_promotion_budget = TIER1_PROMOTION_BUDGET;
+
+/*
+ * Deferred tier-1 promotion request table.
+ *
+ * Calling tb_gen_code from within the post-execution handler is unsafe
+ * (it breaks rendering).  Instead, promotion only invalidates the old
+ * TB and records the request here.  The natural tb_gen_code path
+ * (called from tb_find on the next cache miss) checks this table and
+ * sets CF_TIER1 on the new TB so the tier-1 optimisation passes fire.
+ */
+#define TIER1_REQUEST_SLOTS 64
+
+typedef struct {
+    vaddr    pc;
+    uint64_t cs_base;
+    uint32_t flags;
+    uint32_t exec_count;
+    bool     valid;
+} Tier1Request;
+
+static Tier1Request tier1_requests[TIER1_REQUEST_SLOTS];
+
+/*
+ * Called from tb_gen_code (translate-all.c) to check whether a
+ * freshly translated TB should use tier-1 optimisations.
+ * Returns the saved exec_count if a request matches, or -1.
+ */
+/*
+ * Peek: returns true if there is a pending tier-1 request for (pc,
+ * cs_base, flags) without consuming it.
+ */
+bool tier1_has_pending_request(vaddr pc, uint64_t cs_base, uint32_t flags)
+{
+    for (int i = 0; i < TIER1_REQUEST_SLOTS; i++) {
+        if (tier1_requests[i].valid &&
+            tier1_requests[i].pc == pc &&
+            tier1_requests[i].cs_base == cs_base &&
+            tier1_requests[i].flags == flags) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int tier1_consume_request(vaddr pc, uint64_t cs_base, uint32_t flags,
+                          uint32_t *cflags_out)
+{
+    for (int i = 0; i < TIER1_REQUEST_SLOTS; i++) {
+        if (tier1_requests[i].valid &&
+            tier1_requests[i].pc == pc &&
+            tier1_requests[i].cs_base == cs_base &&
+            tier1_requests[i].flags == flags) {
+            tier1_requests[i].valid = false;
+            if (cflags_out) {
+                *cflags_out |= CF_TIER1;
+            }
+            return (int)tier1_requests[i].exec_count;
+        }
+    }
+    return -1;
+}
+
+static void tb_request_tier1_promotion(CPUState *cpu, TranslationBlock *tb)
+{
+    /* Record the request for deferred tier-1 retranslation. */
+    int slot = -1;
+    for (int i = 0; i < TIER1_REQUEST_SLOTS; i++) {
+        if (!tier1_requests[i].valid) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot >= 0) {
+        tier1_requests[slot].pc         = tb->pc;
+        tier1_requests[slot].cs_base    = tb->cs_base;
+        tier1_requests[slot].flags      = tb->flags;
+        tier1_requests[slot].exec_count = tb->exec_count;
+        tier1_requests[slot].valid      = true;
+    }
+
+    /*
+     * Invalidate the old TB.  Pass -1 so tb_phys_invalidate removes
+     * it from the page list (standalone invalidation path).
+     */
+    mmap_lock();
+    tb_phys_invalidate(tb, -1);
+    mmap_unlock();
+}
+
+/*
+ * Check if a TB should be promoted to Tier 1 and do so if budget allows.
+ * Called from cpu_exec_loop after execution counting.
+ */
+static inline void tier1_maybe_promote(CPUState *cpu, TranslationBlock *tb)
+{
+    if (tb->tier == 0 && tb->exec_count >= TB_TIER1_THRESHOLD) {
+        if (tier1_promotion_budget > 0) {
+            tier1_promotion_budget--;
+            tb_request_tier1_promotion(cpu, tb);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Superblock detection                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Threshold for superblock candidacy: one exit must dominate with
+ * >95% of all exit traffic, and the TB must have been executed enough.
+ */
+#define SUPERBLOCK_DOMINANCE_PCT 95
+#define SUPERBLOCK_MIN_CHAINS    128
+
+/*
+ * Check if a Tier 1 TB has a dominant single-successor exit.
+ * Returns the exit index (0 or 1) or -1 if no dominant exit.
+ */
+static inline int tb_dominant_exit(const TranslationBlock *tb)
+{
+    uint32_t c0 = tb->chain_count[0];
+    uint32_t c1 = tb->chain_count[1];
+    uint32_t total = c0 + c1;
+
+    if (total < SUPERBLOCK_MIN_CHAINS) {
+        return -1;
+    }
+
+    if (c0 * 100 / total >= SUPERBLOCK_DOMINANCE_PCT) {
+        return 0;
+    }
+    if (c1 * 100 / total >= SUPERBLOCK_DOMINANCE_PCT) {
+        return 1;
+    }
+    return -1;
+}
+
+/*
+ * Forward-declare the superblock formation function (defined in
+ * translate-all.c).  Returns the new superblock TB or NULL on failure.
+ */
+TranslationBlock *tb_gen_superblock(CPUState *cpu,
+                                     TranslationBlock *tb_a,
+                                     int dominant_exit);
+
+#define SUPERBLOCK_BUDGET 4  /* Max superblock formations per budget cycle */
+static int superblock_budget = SUPERBLOCK_BUDGET;
+
+/*
+ * Check if a Tier 1 TB is a superblock candidate and attempt formation.
+ * Called from cpu_exec_loop after tier1 promotion, with budget rate limiting.
+ *
+ * XBOX_SUPERBLOCK_ENABLED: Set to 1 to enable runtime superblock formation.
+ * Currently disabled (0) while the lookup/invalidation integration is
+ * being finalised.  The detection infrastructure (chain_count, dominant
+ * exit) and formation engine (tb_gen_superblock) are fully implemented
+ * and compile-tested; only the trigger is gated.
+ */
+#define XBOX_SUPERBLOCK_ENABLED 0
+
+static inline void tier1_maybe_form_superblock(CPUState *cpu,
+                                                TranslationBlock *tb)
+{
+#if !XBOX_SUPERBLOCK_ENABLED
+    return;
+#else
+    /* Only Tier 1+ TBs, not already a superblock. */
+    if (tb->tier < 1 || tb->superblock != NULL) {
+        return;
+    }
+    if (tb->cflags & CF_SUPERBLOCK) {
+        return;
+    }
+
+    int dom = tb_dominant_exit(tb);
+    if (dom < 0) {
+        return;
+    }
+
+    /* Check budget. */
+    if (superblock_budget <= 0) {
+        return;
+    }
+
+    /* Verify successor exists and is valid. */
+    uintptr_t dest = qatomic_read(&tb->jmp_dest[dom]);
+    if (dest == (uintptr_t)NULL || (dest & 1)) {
+        return;
+    }
+    TranslationBlock *tb_b = (TranslationBlock *)dest;
+    if (tb_b->cflags & (CF_INVALID | CF_SUPERBLOCK)) {
+        return;
+    }
+
+    /* Both must be single-page TBs. */
+    if (tb_page_addr1(tb) != -1 || tb_page_addr1(tb_b) != -1) {
+        return;
+    }
+
+    superblock_budget--;
+    mmap_lock();
+    tb_gen_superblock(cpu, tb, dom);
+    mmap_unlock();
+#endif /* XBOX_SUPERBLOCK_ENABLED */
+}
+
+/*
+ * Reset the promotion budget periodically.  Called from cpu_exec_loop.
+ * Uses a simple call counter rather than real time to avoid clock overhead.
+ */
+#define TIER1_BUDGET_RESET_INTERVAL 100000
+static uint32_t tier1_budget_counter;
+
+static inline void tier1_maybe_reset_budget(void)
+{
+    if (++tier1_budget_counter >= TIER1_BUDGET_RESET_INTERVAL) {
+        tier1_budget_counter = 0;
+        tier1_promotion_budget = TIER1_PROMOTION_BUDGET;
+        superblock_budget = SUPERBLOCK_BUDGET;
+    }
+}
+
+#endif /* XBOX */
 
 /* -icount align implementation. */
 
@@ -663,6 +900,15 @@ static inline void tb_add_jump(TranslationBlock *tb, int n,
     tb->jmp_list_next[n] = tb_next->jmp_list_head;
     tb_next->jmp_list_head = (uintptr_t)tb | n;
 
+#ifdef XBOX
+    {
+        uint32_t cnt = tb->chain_count[n];
+        if (cnt < UINT32_MAX) {
+            tb->chain_count[n] = cnt + 1;
+        }
+    }
+#endif
+
     qemu_spin_unlock(&tb_next->jmp_lock);
 
     qemu_log_mask(CPU_LOG_EXEC, "Linking TBs %p index %d -> %p\n",
@@ -1027,6 +1273,27 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             }
 
             cpu_loop_exec_tb(cpu, tb, s.pc, &last_tb, &tb_exit);
+
+#ifdef XBOX
+            {
+                uint32_t c = tb->exec_count;
+                if (c < TB_TIER1_THRESHOLD * 2) {
+                    tb->exec_count = c + 1;
+                }
+                tier1_maybe_promote(cpu, tb);
+                tier1_maybe_form_superblock(cpu, tb);
+                tier1_maybe_reset_budget();
+
+                /*
+                 * If promotion or superblock formation invalidated tb,
+                 * clear last_tb so the next iteration doesn't try to
+                 * chain from an invalidated TB via tb_add_jump().
+                 */
+                if (tb->cflags & CF_INVALID) {
+                    last_tb = NULL;
+                }
+            }
+#endif
 
             /* Try to align the host and virtual clocks
                if the guest is in advance */

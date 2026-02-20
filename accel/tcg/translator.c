@@ -148,7 +148,15 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
     /* Start translating.  */
+#ifdef XBOX
+    if (tcg_ctx->superblock_append) {
+        icount_start_insn = NULL;
+    } else {
+        icount_start_insn = gen_tb_start(db, cflags);
+    }
+#else
     icount_start_insn = gen_tb_start(db, cflags);
+#endif
     ops->tb_start(db, cpu);
     tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
@@ -204,7 +212,13 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
 
     /* Emit code to exit the TB, as indicated by db->is_jmp.  */
     ops->tb_stop(db, cpu);
+#ifdef XBOX
+    if (!tcg_ctx->superblock_append) {
+        gen_tb_end(tb, cflags, icount_start_insn, db->num_insns);
+    }
+#else
     gen_tb_end(tb, cflags, icount_start_insn, db->num_insns);
+#endif
 
     /*
      * Manage can_do_io for the translation block: set to false before

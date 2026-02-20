@@ -39,6 +39,9 @@
 #include "tcg/perf.h"
 #include "tcg/insn-start-words.h"
 #include "tb-cache-hints.h"
+#ifdef XBOX
+#include "tb-code-hash.h"
+#endif
 
 #if defined(CONFIG_VTUNE_JITPROFILING)
 #include <jitprofiling.h>
@@ -293,6 +296,24 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
 
     tb = inv_tb_htable_lookup(cpu, s);
     if (tb) {
+#ifdef XBOX
+        /*
+         * If there is a pending tier-1 promotion request for this PC,
+         * do NOT recycle the old (tier-0) code.  Remove the stale entry
+         * from inv_htable and fall through to fresh generation so the
+         * tier1_consume_request check triggers and CF_TIER1 is set.
+         */
+        if (tier1_has_pending_request(s.pc, s.cs_base, s.flags)) {
+            uint32_t orig = tb_cflags(tb);
+            uint32_t h = tb_hash_func(phys_pc,
+                                      (orig & CF_PCREL ? 0 : tb->pc),
+                                      tb->flags, tb->cs_base,
+                                      orig & ~CF_INVALID);
+            qht_remove(&tb_ctx.inv_htable, tb, h);
+            tb = NULL;
+            goto skip_recycle;
+        }
+#endif
         qemu_spin_lock(&tb->jmp_lock);
         qatomic_set(&tb->cflags, tb->cflags & ~CF_INVALID);
         qemu_spin_unlock(&tb->jmp_lock);
@@ -309,6 +330,9 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
         recycled = true;
         goto recycle_tb;
     }
+#ifdef XBOX
+ skip_recycle:
+#endif
 
  buffer_overflow:
     assert_no_pages_locked();
@@ -335,6 +359,26 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
     tb->cs_base = s.cs_base;
     tb->flags = s.flags;
     tb->cflags = s.cflags;
+#ifdef XBOX
+    tb->exec_count = 0;
+    tb->tier = 0;
+    tb->chain_count[0] = 0;
+    tb->chain_count[1] = 0;
+    tb->superblock = NULL;
+
+    /* Check if this PC has a pending tier-1 promotion request. */
+    {
+        uint32_t tier1_cflags = tb->cflags;
+        int saved_exec = tier1_consume_request(s.pc, s.cs_base, s.flags,
+                                               &tier1_cflags);
+        if (saved_exec >= 0) {
+            tb->cflags = tier1_cflags;
+            s.cflags = tier1_cflags;
+            tb->tier = 1;
+            tb->exec_count = (uint32_t)saved_exec;
+        }
+    }
+#endif
     tb_set_page_addr0(tb, phys_pc);
     tb_set_page_addr1(tb, -1);
     if (phys_pc != -1) {
@@ -550,6 +594,18 @@ recycle_tb:
         return tb;
     }
 
+#ifdef XBOX
+    /*
+     * Strip CF_TIER1 BEFORE tb_link_page hashes the TB.  CF_TIER1 is
+     * only used during code generation to trigger tier-1 optimisation
+     * passes; keeping it in cflags would place the TB in the wrong
+     * hash bucket, making it unfindable by normal lookups.
+     */
+    if (tb->cflags & CF_TIER1) {
+        tb->cflags &= ~CF_TIER1;
+    }
+#endif
+
     /*
      * No explicit memory barrier is required -- tb_link_page() makes the
      * TB visible in a consistent state.
@@ -687,3 +743,395 @@ void tcg_flush_jmp_cache(CPUState *cpu)
         qatomic_set(&jc->array[i].tb, NULL);
     }
 }
+
+/* ================================================================== */
+/*  Superblock Formation: merge TB A and TB B into a single TB        */
+/* ================================================================== */
+
+#ifdef XBOX
+
+#include "tcg/tcg-op-common.h"
+#include "exec/translator.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#define SB_LOG(...) __android_log_print(ANDROID_LOG_INFO, "superblock", __VA_ARGS__)
+#else
+#define SB_LOG(...) do {} while (0)
+#endif
+
+/*
+ * IR surgery: find the goto_tb + exit_tb pair for a given exit slot.
+ * Walks backward from the end of the ops list.
+ * Returns the goto_tb op, or NULL if not found.
+ * Also sets *out_exit_tb to the corresponding exit_tb op.
+ */
+static TCGOp *sb_find_exit_ops(TCGContext *s, int slot, TCGOp **out_exit_tb)
+{
+    TCGOp *found_exit = NULL;
+    TCGOp *found_goto = NULL;
+    TCGOp *op;
+
+    *out_exit_tb = NULL;
+
+    QTAILQ_FOREACH_REVERSE(op, &s->ops, link) {
+        if (op->opc == INDEX_op_exit_tb) {
+            uintptr_t val = op->args[0];
+            /*
+             * exit_tb encodes (tb_ptr | exit_idx).  The bottom bits
+             * give the slot index.  TB_EXIT_REQUESTED is a special
+             * value; skip it.
+             */
+            int idx = val & 3;
+            if (val != 0 && idx == slot) {
+                found_exit = op;
+                /* The goto_tb for this slot should be shortly before. */
+                TCGOp *prev = QTAILQ_PREV(op, link);
+                while (prev) {
+                    if (prev->opc == INDEX_op_goto_tb &&
+                        (int)prev->args[0] == slot) {
+                        found_goto = prev;
+                        *out_exit_tb = found_exit;
+                        return found_goto;
+                    }
+                    /* Don't search too far back. */
+                    if (prev->opc == INDEX_op_set_label ||
+                        prev->opc == INDEX_op_call) {
+                        break;
+                    }
+                    prev = QTAILQ_PREV(prev, link);
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Remap an exit_tb op to use a new slot index and TB pointer.
+ * Also remap the corresponding goto_tb slot number.
+ */
+static void sb_remap_exit(TCGOp *goto_op, TCGOp *exit_op,
+                          int new_slot, TranslationBlock *new_tb)
+{
+    goto_op->args[0] = new_slot;
+    exit_op->args[0] = (uintptr_t)new_tb | new_slot;
+}
+
+/*
+ * Detach the trailing exitreq epilogue (set_label + exit_tb EXIT_REQUESTED)
+ * from the ops list.  Save the ops for later re-attachment.
+ */
+static bool sb_detach_exitreq(TCGContext *s,
+                              TCGOp **out_label, TCGOp **out_exit)
+{
+    *out_label = NULL;
+    *out_exit = NULL;
+
+    /* The exitreq exit_tb should be the very last op. */
+    TCGOp *last = QTAILQ_LAST(&s->ops);
+    if (!last || last->opc != INDEX_op_exit_tb) {
+        return false;
+    }
+
+    /* The set_label should be just before it. */
+    TCGOp *prev = QTAILQ_PREV(last, link);
+    if (!prev || prev->opc != INDEX_op_set_label) {
+        return false;
+    }
+
+    *out_exit = last;
+    *out_label = prev;
+
+    QTAILQ_REMOVE(&s->ops, last, link);
+    s->nb_ops--;
+    QTAILQ_REMOVE(&s->ops, prev, link);
+    s->nb_ops--;
+
+    return true;
+}
+
+/*
+ * Re-attach the exitreq epilogue at the tail, updating the TB pointer.
+ */
+static void sb_reattach_exitreq(TCGContext *s,
+                                TCGOp *label_op, TCGOp *exit_op,
+                                TranslationBlock *sb)
+{
+    /* Update the exit_tb arg to point to the superblock. */
+    exit_op->args[0] = (uintptr_t)sb | TB_EXIT_REQUESTED;
+
+    QTAILQ_INSERT_TAIL(&s->ops, label_op, link);
+    s->nb_ops++;
+    QTAILQ_INSERT_TAIL(&s->ops, exit_op, link);
+    s->nb_ops++;
+}
+
+/*
+ * tb_gen_superblock -- merge TB A and TB B into a single superblock.
+ *
+ * This is the main formation function.  It:
+ *   1. Translates A's guest code into TCG IR
+ *   2. Performs IR surgery to remove A's dominant exit
+ *   3. Translates B's guest code, appending to the same IR
+ *   4. Remaps exit slots and reattaches the exitreq epilogue
+ *   5. Generates native code via tcg_gen_code()
+ *
+ * Returns the new superblock TB, or NULL on failure.
+ */
+TranslationBlock *tb_gen_superblock(CPUState *cpu,
+                                     TranslationBlock *tb_a,
+                                     int dominant_exit)
+{
+    CPUArchState *env = cpu_env(cpu);
+    TranslationBlock *tb, *existing_tb;
+    tb_page_addr_t phys_pc_a, phys_pc_b;
+    void *host_pc_a, *host_pc_b;
+    tcg_insn_unit *gen_code_buf;
+    int gen_code_size, search_size, max_insns;
+    int64_t ti;
+    int non_dominant = 1 - dominant_exit;
+
+    /* Look up TB B from A's jump destination. */
+    uintptr_t dest = qatomic_read(&tb_a->jmp_dest[dominant_exit]);
+    if (dest == (uintptr_t)NULL || (dest & 1)) {
+        return NULL;
+    }
+    TranslationBlock *tb_b = (TranslationBlock *)dest;
+
+    /* Resolve physical addresses and host pointers. */
+    phys_pc_a = get_page_addr_code_hostp(env, tb_a->pc, &host_pc_a);
+    phys_pc_b = get_page_addr_code_hostp(env, tb_b->pc, &host_pc_b);
+    if (phys_pc_a == -1 || phys_pc_b == -1) {
+        return NULL;
+    }
+
+    /*
+     * Invalidate the original TB A before creating the superblock.
+     * Pass -1 so the TB is properly removed from the page list.
+     */
+    tb_phys_invalidate(tb_a, -1);
+
+    assert_memory_lock();
+    qemu_thread_jit_write();
+
+    /* Allocate a new TB for the superblock. */
+    tb = tcg_tb_alloc(tcg_ctx);
+    if (!tb) {
+        return NULL;
+    }
+
+    gen_code_buf = tcg_ctx->code_gen_ptr;
+    tb->tc.ptr = tcg_splitwx_to_rx(gen_code_buf);
+    tb->pc = tb_a->pc;
+    tb->cs_base = tb_a->cs_base;
+    tb->flags = tb_a->flags;
+    tb->cflags = (tb_a->cflags & ~(CF_COUNT_MASK | CF_INVALID | CF_TIER1))
+                 | CF_TIER1 | CF_SUPERBLOCK;
+    tb->exec_count = 0;
+    tb->tier = 2;
+    tb->chain_count[0] = 0;
+    tb->chain_count[1] = 0;
+    tb->superblock = NULL;
+    tb_set_page_addr0(tb, phys_pc_a);
+    tb_set_page_addr1(tb, (phys_pc_a != phys_pc_b) ? phys_pc_b : -1);
+    tb_lock_page0(phys_pc_a);
+    if (phys_pc_a != phys_pc_b) {
+        tb_lock_page1(phys_pc_a, phys_pc_b);
+    }
+
+    tcg_ctx->gen_tb = tb;
+    tcg_ctx->addr_type = target_long_bits() == 32 ? TCG_TYPE_I32 : TCG_TYPE_I64;
+    tcg_ctx->guest_mo = cpu->cc->tcg_ops->guest_default_memory_order;
+
+    /* Step 1: Translate A's instruction range (standard path). */
+    int ret = sigsetjmp(tcg_ctx->jmp_trans, 0);
+    if (ret != 0) {
+        /* Translation error -- bail out. */
+        tb_unlock_pages(tb);
+        tcg_ctx->gen_tb = NULL;
+        return NULL;
+    }
+
+    tcg_func_start(tcg_ctx);
+    tcg_ctx->cpu = cpu;
+
+    max_insns = tb_a->icount;
+    if (max_insns == 0) {
+        max_insns = TCG_MAX_INSNS;
+    }
+
+    cpu->cc->tcg_ops->translate_code(cpu, tb, &max_insns, tb_a->pc, host_pc_a);
+
+    int a_insns = tb->icount;
+    int a_size = tb->size;
+
+    /* Step 2: Detach the exitreq epilogue. */
+    TCGOp *exitreq_label, *exitreq_exit;
+    if (!sb_detach_exitreq(tcg_ctx, &exitreq_label, &exitreq_exit)) {
+        tb_unlock_pages(tb);
+        tcg_ctx->gen_tb = NULL;
+        tcg_ctx->cpu = NULL;
+        return NULL;
+    }
+
+    /* Step 3: Find and remove the dominant exit (goto_tb + exit_tb). */
+    TCGOp *dom_goto, *dom_exit;
+    dom_goto = sb_find_exit_ops(tcg_ctx, dominant_exit, &dom_exit);
+    if (!dom_goto || !dom_exit) {
+        /* Can't find the exit -- reattach exitreq and bail. */
+        sb_reattach_exitreq(tcg_ctx, exitreq_label, exitreq_exit, tb);
+        tb_unlock_pages(tb);
+        tcg_ctx->gen_tb = NULL;
+        tcg_ctx->cpu = NULL;
+        return NULL;
+    }
+
+    /* Remove the dominant exit ops. */
+    tcg_op_remove(tcg_ctx, dom_goto);
+    tcg_op_remove(tcg_ctx, dom_exit);
+
+    /* Step 4: Remap non-dominant exit to slot 0. */
+    TCGOp *nd_goto, *nd_exit;
+    nd_goto = sb_find_exit_ops(tcg_ctx, non_dominant, &nd_exit);
+    if (nd_goto && nd_exit) {
+        sb_remap_exit(nd_goto, nd_exit, 0, tb);
+    }
+
+    /* Step 5: Translate B's instructions (appended to existing IR).
+     * Set superblock_append so translator_loop skips gen_tb_start/gen_tb_end. */
+    int b_max = tb_b->icount;
+    if (b_max == 0) {
+        b_max = TCG_MAX_INSNS;
+    }
+
+    tcg_ctx->superblock_append = true;
+#ifdef CONFIG_DEBUG_TCG
+    tcg_ctx->goto_tb_issue_mask = 0;
+#endif
+    cpu->cc->tcg_ops->translate_code(cpu, tb, &b_max, tb_b->pc, host_pc_b);
+    tcg_ctx->superblock_append = false;
+
+    int b_insns = tb->icount;  /* translate_code updates tb->icount */
+    /* tb->size was updated by translate_code to B's size; save it. */
+    int b_size = tb->size;
+
+    /* Step 6: Remap B's exits.
+     * IMPORTANT: Remap slot 1 first, then slot 0, to avoid finding
+     * a just-remapped op when searching.
+     *
+     * B's exit slot 1 -> remove goto_tb, convert to indirect lookup
+     * B's exit slot 0 -> superblock slot 1
+     */
+    TCGOp *b_goto1, *b_exit1;
+    b_goto1 = sb_find_exit_ops(tcg_ctx, 1, &b_exit1);
+    if (b_goto1 && b_exit1) {
+        /*
+         * Convert B's second exit to an indirect lookup.
+         * Remove goto_tb, keep exit_tb with val=0 (triggers epilogue
+         * return with NULL, which the main loop handles as a full lookup).
+         */
+        tcg_op_remove(tcg_ctx, b_goto1);
+        b_exit1->args[0] = 0;  /* exit_tb(NULL, 0) -> full lookup */
+    }
+
+    TCGOp *b_goto0, *b_exit0;
+    b_goto0 = sb_find_exit_ops(tcg_ctx, 0, &b_exit0);
+    if (b_goto0 && b_exit0) {
+        sb_remap_exit(b_goto0, b_exit0, 1, tb);
+    }
+
+    /* Step 7: Reattach exitreq epilogue. */
+    sb_reattach_exitreq(tcg_ctx, exitreq_label, exitreq_exit, tb);
+
+    /* Step 8: Generate native code (Tier 1 passes apply automatically). */
+    tb->size = a_size;  /* Restore A's size for the TB entry point range */
+    tb->icount = a_insns + b_insns;
+    (void)b_size;  /* b_size tracked in SuperblockInfo */
+
+    gen_code_size = tcg_gen_code(tcg_ctx, tb, tb_a->pc);
+    tcg_ctx->cpu = NULL;
+    tcg_ctx->gen_tb = NULL;
+
+    if (gen_code_size < 0) {
+        /* Code generation failed -- clean up. */
+        tb_unlock_pages(tb);
+        return NULL;
+    }
+
+    search_size = encode_search(tb, (void *)gen_code_buf + gen_code_size);
+    if (search_size < 0) {
+        tb_unlock_pages(tb);
+        tcg_ctx->gen_tb = NULL;
+        return NULL;
+    }
+    tb->tc.size = gen_code_size;
+
+    qatomic_set(&tcg_ctx->code_gen_ptr, (void *)
+        ROUND_UP((uintptr_t)gen_code_buf + gen_code_size + search_size,
+                 CODE_GEN_ALIGN));
+
+    /* Init jump list. */
+    qemu_spin_init(&tb->jmp_lock);
+    tb->jmp_list_head = (uintptr_t)NULL;
+    tb->jmp_list_next[0] = (uintptr_t)NULL;
+    tb->jmp_list_next[1] = (uintptr_t)NULL;
+    tb->jmp_dest[0] = (uintptr_t)NULL;
+    tb->jmp_dest[1] = (uintptr_t)NULL;
+
+    if (tb->jmp_reset_offset[0] != TB_JMP_OFFSET_INVALID) {
+        tb_reset_jump(tb, 0);
+    }
+    if (tb->jmp_reset_offset[1] != TB_JMP_OFFSET_INVALID) {
+        tb_reset_jump(tb, 1);
+    }
+
+    /*
+     * Compute ihash over the superblock's guest code range (A's code).
+     * This allows proper TB recycling if the superblock is later
+     * invalidated and re-requested.
+     */
+    tb->ihash = tb_code_hash_func(env, tb->pc, tb->size);
+
+    /*
+     * Strip CF_TIER1 | CF_SUPERBLOCK BEFORE insertion so the QHT hash
+     * matches what normal lookups compute (they never include these flags).
+     * tcg_gen_code already used CF_TIER1 for Tier 1 optimization passes.
+     */
+    tb->cflags &= ~(CF_TIER1 | CF_SUPERBLOCK);
+    tb->tier = 2;
+
+    tcg_tb_insert(tb);
+
+    if (tb_page_addr0(tb) == -1) {
+        assert_no_pages_locked();
+        goto fill_superblock_info;
+    }
+
+    existing_tb = tb_link_page(tb);
+    assert_no_pages_locked();
+
+    if (existing_tb != tb) {
+        tcg_tb_remove(tb);
+        return NULL;
+    }
+
+fill_superblock_info:
+    ; /* empty statement to satisfy C99 label-before-declaration rule */
+    /* Step 9: Fill in SuperblockInfo. */
+    SuperblockInfo *sbi = g_malloc0(sizeof(SuperblockInfo));
+    sbi->pc_b = tb_b->pc;
+    sbi->size_b = tb_b->size;
+    sbi->icount_b = b_insns;
+    sbi->phys_pc_b = phys_pc_b;
+    tb->superblock = sbi;
+
+    SB_LOG("formed A=0x%" PRIx64 " + B=0x%" PRIx64
+           ", combined %d insns, pages=%s",
+           (uint64_t)tb_a->pc, (uint64_t)tb_b->pc,
+           a_insns + b_insns,
+           (phys_pc_a != phys_pc_b) ? "2" : "1");
+
+    return tb;
+}
+
+#endif /* XBOX */

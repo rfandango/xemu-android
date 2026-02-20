@@ -41,6 +41,19 @@ struct tb_tc {
     size_t size;
 };
 
+#ifdef XBOX
+/*
+ * Metadata for a merged superblock TB.  Tracks component B's guest
+ * code range so that page invalidation covers both code regions.
+ */
+typedef struct SuperblockInfo {
+    vaddr              pc_b;        /* Guest PC of component B */
+    uint16_t           size_b;      /* Byte size of B's guest code */
+    uint16_t           icount_b;    /* Instruction count of B */
+    tb_page_addr_t     phys_pc_b;   /* Physical address of B (for invalidation) */
+} SuperblockInfo;
+#endif
+
 struct TranslationBlock {
     /*
      * Guest PC corresponding to this block.  This must be the true
@@ -81,8 +94,14 @@ struct TranslationBlock {
 #define CF_NOIRQ         0x00010000 /* Generate an uninterruptible TB */
 #define CF_PCREL         0x00020000 /* Opcodes in TB are PC-relative */
 #define CF_BP_PAGE       0x00040000 /* Breakpoint present in code page */
+#define CF_TIER1         0x00080000 /* Transient: Tier 1 optimized compilation */
+#define CF_SUPERBLOCK    0x00100000 /* Distinguishes superblock TBs in hash */
 #define CF_CLUSTER_MASK  0xff000000 /* Top 8 bits are cluster ID */
 #define CF_CLUSTER_SHIFT 24
+
+#ifdef XBOX
+#define TB_TIER1_THRESHOLD 64  /* Promote to Tier 1 after this many executions */
+#endif
 
     /*
      * Above fields used for comparing
@@ -145,6 +164,14 @@ struct TranslationBlock {
     uintptr_t jmp_list_head;
     uintptr_t jmp_list_next[2];
     uintptr_t jmp_dest[2];
+
+#ifdef XBOX
+    uint32_t exec_count;    /* Approximate execution count (saturating) */
+    uint8_t  tier;          /* 0 = quick, 1 = optimized, 2 = superblock */
+    uint8_t  tier_pad[3];   /* Alignment padding */
+    uint32_t chain_count[2]; /* How many times each exit was taken */
+    SuperblockInfo *superblock; /* Non-NULL if this is a merged superblock */
+#endif
 };
 
 /* The alignment given to TranslationBlock during allocation. */
@@ -158,6 +185,12 @@ static inline uint32_t tb_cflags(const TranslationBlock *tb)
 
 bool tcg_cflags_has(CPUState *cpu, uint32_t flags);
 void tcg_cflags_set(CPUState *cpu, uint32_t flags);
+
+#ifdef XBOX
+bool tier1_has_pending_request(vaddr pc, uint64_t cs_base, uint32_t flags);
+int tier1_consume_request(vaddr pc, uint64_t cs_base, uint32_t flags,
+                          uint32_t *cflags_out);
+#endif
 
 static inline tb_page_addr_t tb_page_addr0(const TranslationBlock *tb)
 {

@@ -20,15 +20,20 @@
 #ifdef XBOX
 
 /*
- * A single translation-block hint -- just the lookup key that
- * tb_gen_code() needs in order to re-translate the block.
+ * A single translation-block hint (v2) -- the lookup key that
+ * tb_gen_code() needs plus hotness metadata for tiered recompilation.
  */
 typedef struct TBCacheHint {
-    uint64_t pc;       /* Guest virtual PC */
-    uint64_t cs_base;  /* Code segment base */
-    uint32_t flags;    /* Architecture context flags */
-    uint32_t cflags;   /* Compile flags (masked) */
-    uint64_t phys_pc;  /* Physical / RAM page address */
+    uint64_t pc;           /* Guest virtual PC */
+    uint64_t cs_base;      /* Code segment base */
+    uint32_t flags;        /* Architecture context flags */
+    uint32_t cflags;       /* Compile flags (masked) */
+    uint64_t phys_pc;      /* Physical / RAM page address */
+    uint32_t exec_count;   /* Approximate execution count */
+    uint8_t  tier;         /* 0 = Tier 0, 1 = Tier 1, 2 = superblock */
+    uint8_t  is_superblock;/* 1 if this hint describes a merged superblock */
+    uint8_t  pad[2];       /* Alignment padding */
+    uint64_t pc_b;         /* Component B's PC (only if is_superblock) */
 } TBCacheHint;
 
 /*

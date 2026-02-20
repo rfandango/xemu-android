@@ -987,6 +987,20 @@ static void do_tb_phys_invalidate(TranslationBlock *tb, bool rm_from_page_list)
 
     qatomic_set(&tb_ctx.tb_phys_invalidate_count,
                 tb_ctx.tb_phys_invalidate_count + 1);
+
+#ifdef XBOX
+    /* Free superblock metadata if this was a merged superblock. */
+    if (tb->superblock) {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "superblock",
+                            "invalidated at 0x%" PRIx64 " (B was 0x%" PRIx64 ")",
+                            (uint64_t)tb->pc,
+                            (uint64_t)tb->superblock->pc_b);
+#endif
+        g_free(tb->superblock);
+        tb->superblock = NULL;
+    }
+#endif
 }
 
 static void tb_phys_invalidate__locked(TranslationBlock *tb)

@@ -2008,6 +2008,9 @@ void tcg_func_start(TCGContext *s)
     QTAILQ_INIT(&s->free_ops);
     s->emit_before_op = NULL;
     QSIMPLEQ_INIT(&s->labels);
+#ifdef XBOX
+    s->superblock_append = false;
+#endif
 
     tcg_debug_assert(s->addr_type <= TCG_TYPE_REG);
 }
@@ -6999,6 +7002,12 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
 
     tcg_optimize(s);
 
+#ifdef XBOX
+    if (tb_cflags(s->gen_tb) & CF_TIER1) {
+        tier1_dead_flag_elimination(s);
+    }
+#endif
+
     reachable_code_pass(s);
     liveness_pass_0(s);
     liveness_pass_1(s);
@@ -7038,6 +7047,13 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     tb->jmp_reset_offset[1] = TB_JMP_OFFSET_INVALID;
     tb->jmp_insn_offset[0] = TB_JMP_OFFSET_INVALID;
     tb->jmp_insn_offset[1] = TB_JMP_OFFSET_INVALID;
+
+#ifdef XBOX
+    if (tb_cflags(tb) & CF_TIER1) {
+        tier1_global_register_pinning(s);
+        tier1_instruction_scheduling(s);
+    }
+#endif
 
     tcg_reg_alloc_start(s);
 

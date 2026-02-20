@@ -466,6 +466,15 @@ struct TCGContext {
     sigjmp_buf jmp_trans;
 
     void *disas_ctx;
+
+#ifdef XBOX
+    /*
+     * When true, translator_loop suppresses gen_tb_start() and
+     * gen_tb_end() so that a second call to translate_code() appends
+     * IR to the existing ops list (used for superblock formation).
+     */
+    bool superblock_append;
+#endif
 };
 
 static inline bool temp_readonly(TCGTemp *ts)
