@@ -114,12 +114,12 @@ TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op,
 /* Tier 1 optimization passes (tier1-opt.c) */
 #ifdef XBOX
 void tier1_dead_flag_elimination(TCGContext *s);
-void tier1_global_register_pinning(TCGContext *s);
-void tier1_instruction_scheduling(TCGContext *s);
+uint8_t tier1_compute_cc_defines_first(TCGContext *s);
+void tier1_cross_tb_dead_flag_elimination(TCGContext *s);
 #else
 static inline void tier1_dead_flag_elimination(TCGContext *s) {}
-static inline void tier1_global_register_pinning(TCGContext *s) {}
-static inline void tier1_instruction_scheduling(TCGContext *s) {}
+static inline uint8_t tier1_compute_cc_defines_first(TCGContext *s) { return 0; }
+static inline void tier1_cross_tb_dead_flag_elimination(TCGContext *s) {}
 #endif
 
 #endif /* TCG_INTERNAL_H */

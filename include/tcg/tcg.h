@@ -474,6 +474,12 @@ struct TCGContext {
      * IR to the existing ops list (used for superblock formation).
      */
     bool superblock_append;
+    /*
+     * For cross-TB dead flag elimination: cc_defines_first mask of
+     * each known successor TB (exit 0 and exit 1).  Populated in
+     * translate-all.c before tcg_gen_code; consumed in tier1-opt.c.
+     */
+    uint8_t succ_cc_defines[2];
 #endif
 };
 

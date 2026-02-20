@@ -240,6 +240,15 @@ void page_init(void)
     page_table_config_init();
 }
 
+#ifdef XBOX
+static bool tb_pc_cmp(const void *p, const void *d)
+{
+    const TranslationBlock *tb = p;
+    const vaddr *target = d;
+    return !(tb_cflags(tb) & CF_INVALID) && tb->pc == *target;
+}
+#endif
+
 /*
  * Isolate the portion of code gen which can setjmp/longjmp.
  * Return the size of the generated code, or negative on error.
@@ -262,6 +271,32 @@ static int setjmp_gen_code(CPUArchState *env, TranslationBlock *tb,
     assert(tb->size != 0);
     tcg_ctx->cpu = NULL;
     *max_insns = tb->icount;
+
+#ifdef XBOX
+    /*
+     * Populate successor CC defines for cross-TB dead flag elimination.
+     * jmp_target_addr is now set (translate_code just completed).
+     * Best-effort lookup of each successor in the TB hash table.
+     */
+    tcg_ctx->succ_cc_defines[0] = 0;
+    tcg_ctx->succ_cc_defines[1] = 0;
+    if (tb_cflags(tb) & CF_TIER1) {
+        for (int n = 0; n < 2; n++) {
+            vaddr target = tb->jmp_target_addr[n];
+            if (target == 0 || target == (vaddr)-1) {
+                continue;
+            }
+            uint32_t lc = tb_cflags(tb) & ~(CF_TIER1 | CF_INVALID);
+            uint32_t h = tb_hash_func(target, target,
+                                       tb->flags, tb->cs_base, lc);
+            TranslationBlock *succ = qht_lookup_custom(
+                &tb_ctx.htable, &target, h, tb_pc_cmp);
+            if (succ) {
+                tcg_ctx->succ_cc_defines[n] = succ->cc_defines_first;
+            }
+        }
+    }
+#endif
 
     return tcg_gen_code(tcg_ctx, tb, pc);
 }
@@ -362,6 +397,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
 #ifdef XBOX
     tb->exec_count = 0;
     tb->tier = 0;
+    tb->cc_defines_first = 0;
     tb->chain_count[0] = 0;
     tb->chain_count[1] = 0;
     tb->superblock = NULL;

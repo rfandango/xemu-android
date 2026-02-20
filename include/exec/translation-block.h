@@ -168,7 +168,15 @@ struct TranslationBlock {
 #ifdef XBOX
     uint32_t exec_count;    /* Approximate execution count (saturating) */
     uint8_t  tier;          /* 0 = quick, 1 = optimized, 2 = superblock */
-    uint8_t  tier_pad[3];   /* Alignment padding */
+    /*
+     * Bitmask of CC globals (cc_op=0, cc_dst=1, cc_src=2, cc_src2=3)
+     * that are DEFINED (written) before any USE (read) in this TB.
+     * Used by tier1 cross-TB dead flag elimination: if a successor TB
+     * defines a CC global before reading it, the predecessor's store
+     * of that global at exit is dead.
+     */
+    uint8_t  cc_defines_first;
+    uint8_t  tier_pad[1];   /* Alignment padding */
     uint32_t chain_count[2]; /* How many times each exit was taken */
     SuperblockInfo *superblock; /* Non-NULL if this is a merged superblock */
 #endif

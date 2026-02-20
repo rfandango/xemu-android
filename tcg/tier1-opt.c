@@ -204,340 +204,174 @@ void tier1_dead_flag_elimination(TCGContext *s)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Phase 4: Extended Register Allocation (Global Pinning)             */
-/* ------------------------------------------------------------------ */
-
 /*
- * For Tier 1 blocks, set register preferences on ops that write to
- * CC globals to favor callee-saved registers (X20-X27 on ARM64).
- * This guides the allocator to keep frequently accessed CC state
- * in registers rather than spilling to memory.
+ * Compute cc_defines_first: forward scan of IR to find which CC globals
+ * are DEFINED before any USE.  Stored on the TB for cross-TB DFE.
  *
- * This runs after the liveness passes have set initial output_pref,
- * and we OR in our preferences to augment rather than replace.
+ * Returns a bitmask where bit i is set if cc_temps[i] is written
+ * before being read in the TB's IR.
  */
-void tier1_global_register_pinning(TCGContext *s)
+uint8_t tier1_compute_cc_defines_first(TCGContext *s)
 {
     Tier1DFEContext ctx = { .tcg = s };
+    TCGOp *op;
+    uint32_t defined = 0;
+    uint32_t used = 0;
+
+    if (!find_cc_globals(&ctx)) {
+        return 0;
+    }
+
+    QTAILQ_FOREACH(op, &s->ops, link) {
+        TCGOpcode opc = op->opc;
+        const TCGOpDef *def;
+
+        if (opc == INDEX_op_insn_start) {
+            continue;
+        }
+
+        /* At calls or branches, stop -- subsequent code may not execute. */
+        if (opc == INDEX_op_call || opc == INDEX_op_set_label) {
+            break;
+        }
+
+        def = &tcg_op_defs[opc];
+        if (def->flags & (TCG_OPF_BB_EXIT | TCG_OPF_BB_END |
+                          TCG_OPF_COND_BRANCH)) {
+            break;
+        }
+
+        int nb_oargs = def->nb_oargs;
+        int nb_iargs = def->nb_iargs;
+
+        /* Check reads first (order matters: read before write in same op). */
+        for (int i = nb_oargs; i < nb_oargs + nb_iargs; i++) {
+            TCGTemp *ts = arg_temp(op->args[i]);
+            int idx = cc_global_index(&ctx, ts);
+            if (idx >= 0) {
+                used |= (1u << idx);
+            }
+        }
+
+        /* Then check writes. */
+        for (int i = 0; i < nb_oargs; i++) {
+            TCGTemp *ts = arg_temp(op->args[i]);
+            int idx = cc_global_index(&ctx, ts);
+            if (idx >= 0 && !(used & (1u << idx))) {
+                defined |= (1u << idx);
+            }
+        }
+    }
+
+    return (uint8_t)(defined & 0xf);
+}
+
+/*
+ * Cross-TB dead flag elimination for tier1 TBs.
+ *
+ * For goto_tb exits with a known successor TB, check the successor's
+ * cc_defines_first mask (pre-populated in s->succ_cc_defines[] by the
+ * caller in translate-all.c).  If the successor defines a CC global
+ * before using it, the predecessor's store of that global at exit is dead.
+ *
+ * This extends the existing intra-TB DFE by reducing the conservative
+ * "all live" assumption at exit points.
+ */
+void tier1_cross_tb_dead_flag_elimination(TCGContext *s)
+{
+    Tier1DFEContext ctx = { .tcg = s, .num_eliminated = 0 };
+    TCGOp *op, *op_prev;
 
     if (!find_cc_globals(&ctx)) {
         return;
     }
 
-    /*
-     * Build a register set of callee-saved registers that we'd like
-     * CC globals to live in.  X20-X27 are callee-saved on ARM64 and
-     * are at the top of the allocation order.
-     */
-    TCGRegSet cc_pref = 0;
-#if defined(__aarch64__) || defined(_M_ARM64)
-    tcg_regset_set_reg(cc_pref, TCG_REG_X20);
-    tcg_regset_set_reg(cc_pref, TCG_REG_X21);
-    tcg_regset_set_reg(cc_pref, TCG_REG_X22);
-    tcg_regset_set_reg(cc_pref, TCG_REG_X23);
-#else
-    /* On non-ARM64, use a generic preference of all allocatable regs. */
-    cc_pref = MAKE_64BIT_MASK(0, TCG_TARGET_NB_REGS);
-#endif
-
-    TCGOp *op;
-    QTAILQ_FOREACH(op, &s->ops, link) {
-        TCGOpcode opc = op->opc;
-
-        if (opc == INDEX_op_call || opc == INDEX_op_set_label) {
-            continue;
-        }
-
-        const TCGOpDef *def = &tcg_op_defs[opc];
-        int nb_oargs = def->nb_oargs;
-
-        for (int i = 0; i < nb_oargs && i < 2; i++) {
-            TCGTemp *ts = arg_temp(op->args[i]);
-            int idx = cc_global_index(&ctx, ts);
-            if (idx >= 0) {
-                /* Augment existing preference with our callee-saved set. */
-                op->output_pref[i] |= cc_pref;
-            }
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/*  Phase 5: Basic-Block Instruction Scheduling                        */
-/* ------------------------------------------------------------------ */
-
-/*
- * Simple list scheduling within basic blocks to hide load-use latency.
- *
- * Strategy: identify ops that perform memory loads (qemu_ld, loads
- * from globals) and try to move independent computation between a
- * load and its first consumer.  This is done by reordering TCG IR
- * ops within basic blocks *before* the register allocator / emitter.
- *
- * We use a simple priority scheme:
- *   - Memory loads get high priority (scheduled early)
- *   - Ops that consume recently-loaded values get low priority
- *     (scheduled later to fill the latency gap)
- *   - Everything else stays in order (stable sort)
- */
-
-#define MAX_BB_OPS 512  /* Max ops per basic block we'll attempt to schedule */
-
-typedef struct SchedOp {
-    TCGOp *op;
-    int     priority;     /* Lower = schedule earlier */
-    int     depth;        /* Dependency depth for tie-breaking */
-    bool    is_load;      /* True if this is a memory load op */
-    bool    scheduled;
-} SchedOp;
-
-/*
- * Check if a TCG opcode is a memory load operation.
- */
-static bool is_load_op(TCGOpcode opc)
-{
-    switch (opc) {
-    case INDEX_op_qemu_ld:
-    case INDEX_op_qemu_ld2:
-        return true;
-    default:
-        return false;
-    }
-}
-
-/*
- * Check if op B depends on op A (B reads a temp that A writes).
- */
-static bool op_depends_on(TCGOp *a, TCGOp *b)
-{
-    if (a->opc == INDEX_op_call || b->opc == INDEX_op_call) {
-        return true;
-    }
-
-    const TCGOpDef *def_a = &tcg_op_defs[a->opc];
-    const TCGOpDef *def_b = &tcg_op_defs[b->opc];
-    int a_oargs = def_a->nb_oargs;
-    int b_oargs = def_b->nb_oargs;
-    int b_iargs = def_b->nb_iargs;
-
-    for (int i = 0; i < a_oargs; i++) {
-        TCGTemp *a_out = arg_temp(a->args[i]);
-        /* Check if B reads what A writes. */
-        for (int j = b_oargs; j < b_oargs + b_iargs; j++) {
-            if (arg_temp(b->args[j]) == a_out) {
-                return true;
-            }
-        }
-        /* Check if B also writes the same temp (WAW dependency). */
-        for (int j = 0; j < b_oargs; j++) {
-            if (arg_temp(b->args[j]) == a_out) {
-                return true;
-            }
-        }
-    }
-
-    /* WAR: B writes something that A reads. */
-    for (int i = 0; i < b_oargs; i++) {
-        TCGTemp *b_out = arg_temp(b->args[i]);
-        int a_iargs = def_a->nb_iargs;
-        for (int j = a_oargs; j < a_oargs + a_iargs; j++) {
-            if (arg_temp(a->args[j]) == b_out) {
-                return true;
-            }
-        }
-    }
-
-    /* Side effect ordering. */
-    if ((def_a->flags & TCG_OPF_SIDE_EFFECTS) &&
-        (def_b->flags & TCG_OPF_SIDE_EFFECTS)) {
-        return true;
-    }
-
-    return false;
-}
-
-/*
- * Schedule one basic block's worth of ops using list scheduling.
- * Ops are collected from the tail queue, reordered, and re-inserted.
- */
-static void schedule_basic_block(TCGContext *s, SchedOp *bb, int bb_len)
-{
-    if (bb_len <= 2) {
+    if (s->succ_cc_defines[0] == 0 && s->succ_cc_defines[1] == 0) {
         return;
     }
 
-    /*
-     * Assign priorities: loads get priority 0 (earliest),
-     * ops that directly consume loads get priority 2 (delayed),
-     * everything else gets priority 1.
-     */
-    for (int i = 0; i < bb_len; i++) {
-        bb[i].priority = 1;
-        bb[i].depth = i;
-        bb[i].scheduled = false;
+    uint32_t cc_live = (1u << CC_GLOBAL_COUNT) - 1;
 
-        if (bb[i].is_load) {
-            bb[i].priority = 0;
-        }
-    }
-
-    /* Mark consumers of loads as delayed (priority 2). */
-    for (int i = 0; i < bb_len; i++) {
-        if (!bb[i].is_load) {
-            continue;
-        }
-        for (int j = i + 1; j < bb_len; j++) {
-            if (op_depends_on(bb[i].op, bb[j].op)) {
-                if (bb[j].priority < 2) {
-                    bb[j].priority = 2;
-                }
-                break;
-            }
-        }
-    }
-
-    /*
-     * List schedule: repeatedly pick the ready op with lowest priority
-     * (and lowest depth for tie-breaking) that has all dependencies met.
-     */
-    /*
-     * Find the op just before the first BB op so we can re-insert
-     * after it.  We use the QTAILQ internal prev pointer.
-     */
-    TCGOp *insert_after = NULL;
-    TCGOp *first_op = bb[0].op;
-    TCGOp *tmp;
-    QTAILQ_FOREACH(tmp, &s->ops, link) {
-        if (tmp == first_op) {
-            break;
-        }
-        insert_after = tmp;
-    }
-
-    /* Remove all BB ops from the list. */
-    for (int i = 0; i < bb_len; i++) {
-        QTAILQ_REMOVE(&s->ops, bb[i].op, link);
-    }
-
-    /* Re-insert in scheduled order. */
-    for (int scheduled = 0; scheduled < bb_len; scheduled++) {
-        int best = -1;
-        int best_prio = INT_MAX;
-        int best_depth = INT_MAX;
-
-        for (int i = 0; i < bb_len; i++) {
-            if (bb[i].scheduled) {
-                continue;
-            }
-
-            /* Check all dependencies are satisfied. */
-            bool ready = true;
-            for (int j = 0; j < bb_len; j++) {
-                if (j == i || bb[j].scheduled) {
-                    continue;
-                }
-                if (op_depends_on(bb[j].op, bb[i].op) && !bb[j].scheduled) {
-                    /*
-                     * j must be scheduled before i, but j isn't yet.
-                     * However, we only care about deps where j is BEFORE i
-                     * in the original order.
-                     */
-                    if (bb[j].depth < bb[i].depth) {
-                        ready = false;
-                        break;
-                    }
-                }
-            }
-
-            if (!ready) {
-                continue;
-            }
-
-            if (bb[i].priority < best_prio ||
-                (bb[i].priority == best_prio && bb[i].depth < best_depth)) {
-                best = i;
-                best_prio = bb[i].priority;
-                best_depth = bb[i].depth;
-            }
-        }
-
-        if (best < 0) {
-            /*
-             * Safety: if we can't find a ready op, just emit the first
-             * unscheduled one in original order (dependency cycle or
-             * analysis limitation).
-             */
-            for (int i = 0; i < bb_len; i++) {
-                if (!bb[i].scheduled) {
-                    best = i;
-                    break;
-                }
-            }
-        }
-
-        bb[best].scheduled = true;
-
-        if (insert_after) {
-            QTAILQ_INSERT_AFTER(&s->ops, insert_after, bb[best].op, link);
-        } else {
-            QTAILQ_INSERT_HEAD(&s->ops, bb[best].op, link);
-        }
-        insert_after = bb[best].op;
-    }
-}
-
-/*
- * Tier 1 instruction scheduling pass.
- *
- * Walk the IR, identify basic blocks (sequences between labels and
- * branches), and apply list scheduling to each.
- */
-void tier1_instruction_scheduling(TCGContext *s)
-{
-    SchedOp bb[MAX_BB_OPS];
-    int bb_len = 0;
-    TCGOp *op;
-
-    QTAILQ_FOREACH(op, &s->ops, link) {
+    QTAILQ_FOREACH_REVERSE_SAFE(op, &s->ops, link, op_prev) {
         TCGOpcode opc = op->opc;
-        const TCGOpDef *def = &tcg_op_defs[opc];
+        const TCGOpDef *def;
 
-        /*
-         * Basic block boundaries: labels, branches, exits, calls.
-         * Schedule the accumulated BB and start fresh.
-         */
-        if (opc == INDEX_op_set_label ||
-            opc == INDEX_op_call ||
-            opc == INDEX_op_insn_start ||
-            (def->flags & (TCG_OPF_BB_EXIT | TCG_OPF_BB_END |
-                           TCG_OPF_COND_BRANCH))) {
-            if (bb_len > 0) {
-                schedule_basic_block(s, bb, bb_len);
-                bb_len = 0;
+        if (opc == INDEX_op_set_label) {
+            cc_live = (1u << CC_GLOBAL_COUNT) - 1;
+            continue;
+        }
+
+        def = &tcg_op_defs[opc];
+
+        if (def->flags & (TCG_OPF_BB_EXIT | TCG_OPF_BB_END |
+                          TCG_OPF_COND_BRANCH)) {
+            /*
+             * For goto_tb, check if we know the successor.
+             * The goto_tb index (0 or 1) is in args[0].
+             */
+            if (opc == INDEX_op_goto_tb) {
+                int idx = op->args[0];
+                if (idx < 2 && s->succ_cc_defines[idx]) {
+                    cc_live = ((1u << CC_GLOBAL_COUNT) - 1)
+                              & ~s->succ_cc_defines[idx];
+                } else {
+                    cc_live = (1u << CC_GLOBAL_COUNT) - 1;
+                }
+            } else {
+                cc_live = (1u << CC_GLOBAL_COUNT) - 1;
             }
             continue;
         }
 
-        /* Skip non-data ops. */
-        if (opc == INDEX_op_discard) {
+        if (opc == INDEX_op_call) {
+            cc_live = (1u << CC_GLOBAL_COUNT) - 1;
             continue;
         }
 
-        if (bb_len < MAX_BB_OPS) {
-            bb[bb_len].op = op;
-            bb[bb_len].is_load = is_load_op(opc);
-            bb_len++;
-        } else {
-            /* BB too large; schedule what we have and skip the rest. */
-            schedule_basic_block(s, bb, bb_len);
-            bb_len = 0;
-        }
-    }
+        int nb_oargs = def->nb_oargs;
+        int nb_iargs = def->nb_iargs;
+        bool writes_cc = false;
+        bool all_outputs_dead_cc = true;
+        uint32_t written_cc_mask = 0;
 
-    /* Schedule any trailing BB. */
-    if (bb_len > 0) {
-        schedule_basic_block(s, bb, bb_len);
+        for (int i = 0; i < nb_oargs; i++) {
+            TCGTemp *ts = arg_temp(op->args[i]);
+            int idx = cc_global_index(&ctx, ts);
+            if (idx >= 0) {
+                writes_cc = true;
+                written_cc_mask |= (1u << idx);
+                if (cc_live & (1u << idx)) {
+                    all_outputs_dead_cc = false;
+                }
+            } else {
+                all_outputs_dead_cc = false;
+            }
+        }
+
+        if (writes_cc && all_outputs_dead_cc && nb_oargs > 0 &&
+            !(def->flags & TCG_OPF_SIDE_EFFECTS)) {
+            tcg_op_remove(s, op);
+            ctx.num_eliminated++;
+            continue;
+        }
+
+        if (writes_cc) {
+            for (int i = 0; i < nb_oargs; i++) {
+                TCGTemp *ts = arg_temp(op->args[i]);
+                int idx = cc_global_index(&ctx, ts);
+                if (idx >= 0) {
+                    cc_live &= ~(1u << idx);
+                }
+            }
+        }
+
+        for (int i = nb_oargs; i < nb_oargs + nb_iargs; i++) {
+            TCGTemp *ts = arg_temp(op->args[i]);
+            int idx = cc_global_index(&ctx, ts);
+            if (idx >= 0) {
+                cc_live |= (1u << idx);
+            }
+        }
     }
 }
 

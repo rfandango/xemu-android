@@ -7003,8 +7003,11 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     tcg_optimize(s);
 
 #ifdef XBOX
+    s->gen_tb->cc_defines_first = tier1_compute_cc_defines_first(s);
+
     if (tb_cflags(s->gen_tb) & CF_TIER1) {
         tier1_dead_flag_elimination(s);
+        tier1_cross_tb_dead_flag_elimination(s);
     }
 #endif
 
@@ -7048,12 +7051,10 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     tb->jmp_insn_offset[0] = TB_JMP_OFFSET_INVALID;
     tb->jmp_insn_offset[1] = TB_JMP_OFFSET_INVALID;
 
-#ifdef XBOX
-    if (tb_cflags(tb) & CF_TIER1) {
-        tier1_global_register_pinning(s);
-        tier1_instruction_scheduling(s);
-    }
-#endif
+    /* tier1_global_register_pinning and tier1_instruction_scheduling
+     * removed: register preferences are ignored for short-lived values,
+     * and O(n^2) scheduling on 5-15 op blocks adds overhead with no
+     * measurable benefit.  Dead flag elimination (above) is retained. */
 
     tcg_reg_alloc_start(s);
 

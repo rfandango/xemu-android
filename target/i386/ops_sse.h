@@ -655,13 +655,204 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
 #define FPU_MAX(size, a, b)                                     \
     (float ## size ## _lt(b, a, &env->sse_status) ? (a) : (b))
 
+/*
+ * On ARM64 with SHIFT==1 (XMM 128-bit), use NEON intrinsics for packed
+ * float ops to process all 4 (PS) or 2 (PD) elements in a single
+ * vector instruction instead of looping per-element.
+ */
+#if defined(XBOX) && defined(__aarch64__) && SHIFT == 1
+#include <arm_neon.h>
+
+void glue(helper_addps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vaddq_f32(va, vs));
+}
+
+void glue(helper_addpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vaddq_f64(va, vs));
+}
+
+void helper_addss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_ADD(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_addsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_ADD(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+void glue(helper_subps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vsubq_f32(va, vs));
+}
+
+void glue(helper_subpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vsubq_f64(va, vs));
+}
+
+void helper_subss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_SUB(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_subsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_SUB(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+void glue(helper_mulps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vmulq_f32(va, vs));
+}
+
+void glue(helper_mulpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vmulq_f64(va, vs));
+}
+
+void helper_mulss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_MUL(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_mulsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_MUL(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+void glue(helper_divps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vdivq_f32(va, vs));
+}
+
+void glue(helper_divpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vdivq_f64(va, vs));
+}
+
+void helper_divss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_DIV(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_divsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_DIV(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+void glue(helper_minps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vminq_f32(va, vs));
+}
+
+void glue(helper_minpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vminq_f64(va, vs));
+}
+
+void helper_minss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_MIN(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_minsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_MIN(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+void glue(helper_maxps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float32x4_t va = vld1q_f32((const float *)&v->ZMM_S(0));
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vmaxq_f32(va, vs));
+}
+
+void glue(helper_maxpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    float64x2_t va = vld1q_f64((const double *)&v->ZMM_D(0));
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vmaxq_f64(va, vs));
+}
+
+void helper_maxss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_S(0) = FPU_MAX(32, v->ZMM_S(0), s->ZMM_S(0));
+    for (int i = 1; i < 4; i++) {
+        d->ZMM_L(i) = v->ZMM_L(i);
+    }
+}
+
+void helper_maxsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
+{
+    d->ZMM_D(0) = FPU_MAX(64, v->ZMM_D(0), s->ZMM_D(0));
+    d->ZMM_Q(1) = v->ZMM_Q(1);
+}
+
+#else
 SSE_HELPER_S(add, FPU_ADD)
 SSE_HELPER_S(sub, FPU_SUB)
 SSE_HELPER_S(mul, FPU_MUL)
 SSE_HELPER_S(div, FPU_DIV)
 SSE_HELPER_S(min, FPU_MIN)
 SSE_HELPER_S(max, FPU_MAX)
+#endif
 
+#if defined(XBOX) && defined(__aarch64__) && SHIFT == 1
+void glue(helper_sqrtps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
+{
+    float32x4_t vs = vld1q_f32((const float *)&s->ZMM_S(0));
+    vst1q_f32((float *)&d->ZMM_S(0), vsqrtq_f32(vs));
+}
+
+void glue(helper_sqrtpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
+{
+    float64x2_t vs = vld1q_f64((const double *)&s->ZMM_D(0));
+    vst1q_f64((double *)&d->ZMM_D(0), vsqrtq_f64(vs));
+}
+#else
 void glue(helper_sqrtps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
@@ -685,6 +876,7 @@ void glue(helper_sqrtpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 #endif
     }
 }
+#endif
 
 #if SHIFT == 1
 void helper_sqrtss(CPUX86State *env, Reg *d, Reg *v, Reg *s)

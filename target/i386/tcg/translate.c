@@ -1129,6 +1129,41 @@ static CCPrepare gen_prepare_eflags_o(DisasContext *s, TCGv reg)
         return (CCPrepare) { .cond = TCG_COND_NEVER };
     case CC_OP_MULB ... CC_OP_MULQ:
         return (CCPrepare) { .cond = TCG_COND_NE, .reg = cpu_cc_src };
+    case CC_OP_ADDB ... CC_OP_ADDQ:
+        {
+            /*
+             * OF for ADD: overflow when both operands have the same sign
+             * but the result differs.  dst=result, src1=cpu_cc_src.
+             * src2 = dst - src1.
+             * OF = ((src1 ^ dst) & (src2 ^ dst)) has MSB set iff overflow.
+             */
+            MemOp size = cc_op_size(s->cc_op);
+            TCGv tmp = tcg_temp_new();
+            if (!reg) {
+                reg = tcg_temp_new();
+            }
+            tcg_gen_xor_tl(reg, cpu_cc_src, cpu_cc_dst);
+            tcg_gen_sub_tl(tmp, cpu_cc_dst, cpu_cc_src);
+            tcg_gen_xor_tl(tmp, tmp, cpu_cc_dst);
+            tcg_gen_and_tl(reg, reg, tmp);
+            return gen_prepare_sign_nz(reg, size);
+        }
+    case CC_OP_SUBB ... CC_OP_SUBQ:
+        {
+            /*
+             * OF for SUB: dst=result, cc_srcT=src1, cpu_cc_src=src2.
+             * OF = ((src1 ^ src2) & (src1 ^ dst)) has MSB set iff overflow.
+             */
+            MemOp size = cc_op_size(s->cc_op);
+            TCGv tmp = tcg_temp_new();
+            if (!reg) {
+                reg = tcg_temp_new();
+            }
+            tcg_gen_xor_tl(reg, s->cc_srcT, cpu_cc_src);
+            tcg_gen_xor_tl(tmp, s->cc_srcT, cpu_cc_dst);
+            tcg_gen_and_tl(reg, reg, tmp);
+            return gen_prepare_sign_nz(reg, size);
+        }
     default:
         gen_compute_eflags(s);
         return (CCPrepare) { .cond = TCG_COND_TSTNE, .reg = cpu_cc_src,
@@ -1198,6 +1233,25 @@ static CCPrepare gen_prepare_cc(DisasContext *s, int b, TCGv reg)
                                .reg2 = cpu_cc_src, .use_reg2 = true };
             break;
 
+        default:
+            goto slow_jcc;
+        }
+        break;
+
+    case CC_OP_ADDB ... CC_OP_ADDQ:
+        /*
+         * For ADD: dst = src1 + src2, where cpu_cc_dst = dst,
+         * cpu_cc_src = src1.  Carry = dst < src1 (unsigned).
+         */
+        size = cc_op_size(s->cc_op);
+        switch (jcc_op) {
+        case JCC_BE:
+            /* CF | ZF: for ADD, dst < src1 || dst == 0, i.e. dst <= src1 */
+            tcg_gen_ext_tl(cpu_cc_dst, cpu_cc_dst, size);
+            tcg_gen_ext_tl(cpu_cc_src, cpu_cc_src, size);
+            cc = (CCPrepare) { .cond = TCG_COND_LEU, .reg = cpu_cc_dst,
+                               .reg2 = cpu_cc_src, .use_reg2 = true };
+            break;
         default:
             goto slow_jcc;
         }
