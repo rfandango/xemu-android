@@ -98,11 +98,8 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     }
 #endif
 
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk buffer init: vram=%zu staging=%zu compute=%zu",
-                        vram_size, staging_size, compute_size);
-#endif
+    VK_LOG("buffer_init: vram=%zu staging=%zu compute=%zu",
+           vram_size, staging_size, compute_size);
 
     VmaAllocationCreateInfo host_alloc_create_info = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
@@ -195,12 +192,10 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     };
 
     for (int i = 0; i < BUFFER_COUNT; i++) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                            "vk buffer init: create %s size=%zu",
-                            buffer_names[i], r->storage_buffers[i].buffer_size);
-#endif
+        VK_LOG("buffer_init: create %s size=%zu",
+               buffer_names[i], r->storage_buffers[i].buffer_size);
         if (!create_buffer(pg, &r->storage_buffers[i], buffer_names[i], errp)) {
+            VK_LOG_ERROR("buffer_init: create %s FAILED", buffer_names[i]);
             goto fail;
         }
     }
@@ -210,14 +205,19 @@ bool pgraph_vk_init_buffers(NV2AState *d, Error **errp)
     int buffers_to_map[] = { BUFFER_VERTEX_RAM,
                              BUFFER_INDEX_STAGING,
                              BUFFER_VERTEX_INLINE_STAGING,
-                             BUFFER_UNIFORM_STAGING };
+                             BUFFER_UNIFORM_STAGING,
+                             BUFFER_STAGING_SRC,
+                             BUFFER_STAGING_DST };
 
     for (int i = 0; i < ARRAY_SIZE(buffers_to_map); i++) {
         int idx = buffers_to_map[i];
+        VK_LOG("buffer_init: map %s", buffer_names[idx]);
         VkResult result = vmaMapMemory(
             r->allocator, r->storage_buffers[idx].allocation,
             (void **)&r->storage_buffers[idx].mapped);
         if (result != VK_SUCCESS) {
+            VK_LOG_ERROR("buffer_init: map %s FAILED: %d",
+                         buffer_names[idx], result);
             error_setg(errp, "Failed to map Vulkan buffer %s (%zu bytes): %d",
                        buffer_names[idx], r->storage_buffers[idx].buffer_size,
                        result);

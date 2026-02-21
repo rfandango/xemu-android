@@ -44,6 +44,14 @@
 
 #define HAVE_EXTERNAL_MEMORY 0
 
+#define OPT_N_BUFFERED_SUBMIT   1
+#define OPT_DYNAMIC_STATES      1
+#define OPT_LOAD_OPS            1
+#define OPT_CLEAR_REFACTOR      0
+#define OPT_COMPUTE_SWIZZLE     1
+#define OPT_TEX_NONDRAW_CMD     0
+#define OPT_PRECISE_BARRIERS    1
+
 typedef struct QueueFamilyIndices {
     int queue_family;
 } QueueFamilyIndices;
@@ -55,6 +63,9 @@ typedef struct MemorySyncRequirement {
 typedef struct RenderPassState {
     VkFormat color_format;
     VkFormat zeta_format;
+    VkAttachmentLoadOp color_load_op;
+    VkAttachmentLoadOp zeta_load_op;
+    VkAttachmentLoadOp stencil_load_op;
 } RenderPassState;
 
 typedef struct RenderPass {
@@ -66,7 +77,7 @@ typedef struct PipelineKey {
     bool clear;
     RenderPassState render_pass_state;
     ShaderState shader_state;
-    uint32_t regs[9];
+    uint32_t regs[OPT_DYNAMIC_STATES ? 6 : 9];
     VkVertexInputBindingDescription binding_descriptions[NV2A_VERTEXSHADER_ATTRIBUTES];
     VkVertexInputAttributeDescription attribute_descriptions[NV2A_VERTEXSHADER_ATTRIBUTES];
 } PipelineKey;
@@ -298,10 +309,17 @@ typedef struct PGRAPHVkDisplayState {
     GLuint gl_texture_id;
 } PGRAPHVkDisplayState;
 
+typedef enum {
+    COMPUTE_TYPE_DEPTH_STENCIL = 0,
+    COMPUTE_TYPE_SWIZZLE = 1,
+    COMPUTE_TYPE_UNSWIZZLE = 2,
+} ComputeType;
+
 typedef struct ComputePipelineKey {
     VkFormat host_fmt;
     bool pack;
     int workgroup_size;
+    ComputeType compute_type;
 } ComputePipelineKey;
 
 typedef struct ComputePipeline {
@@ -336,9 +354,14 @@ typedef struct PGRAPHVkState {
     VmaAllocator allocator;
     uint32_t allocator_last_submit_index;
 
+#define NUM_SUBMIT_FRAMES (OPT_N_BUFFERED_SUBMIT ? 2 : 1)
     VkQueue queue;
     VkCommandPool command_pool;
-    VkCommandBuffer command_buffers[2];
+    VkCommandBuffer command_buffers[NUM_SUBMIT_FRAMES * 2];
+    VkSemaphore frame_semaphores[NUM_SUBMIT_FRAMES];
+    VkFence frame_fences[NUM_SUBMIT_FRAMES];
+    bool frame_submitted[NUM_SUBMIT_FRAMES];
+    int current_frame;
 
     VkCommandBuffer command_buffer;
     VkSemaphore command_buffer_semaphore;
@@ -348,6 +371,7 @@ typedef struct PGRAPHVkState {
     uint32_t submit_count;
 
     VkCommandBuffer aux_command_buffer;
+    VkFence aux_fence;
     bool in_aux_command_buffer;
 
     VkFramebuffer framebuffers[50];
@@ -355,15 +379,19 @@ typedef struct PGRAPHVkState {
     bool framebuffer_dirty;
 
     VkRenderPass render_pass;
+    VkRenderPass begin_render_pass;
     GArray *render_passes; // RenderPass
     bool in_render_pass;
     bool in_draw;
+    bool color_drawn_in_cb;
+    bool zeta_drawn_in_cb;
 
     Lru pipeline_cache;
     VkPipelineCache vk_pipeline_cache;
     PipelineBinding *pipeline_cache_entries;
     PipelineBinding *pipeline_binding;
     bool pipeline_binding_changed;
+    bool pipeline_state_dirty;
 
     VkDescriptorPool descriptor_pool;
     VkDescriptorSetLayout descriptor_set_layout;
@@ -417,12 +445,16 @@ typedef struct PGRAPHVkState {
     bool uniforms_changed;
 
     VkQueryPool query_pool;
-    int max_queries_in_flight; // FIXME: Move out to constant
+    int max_queries_in_flight;
     int num_queries_in_flight;
     bool new_query_needed;
     bool query_in_flight;
+    bool queries_reset_in_cb;
     uint32_t zpass_pixel_count_result;
-    QSIMPLEQ_HEAD(, QueryReport) report_queue; // FIXME: Statically allocate
+    QSIMPLEQ_HEAD(, QueryReport) report_queue;
+    QSIMPLEQ_HEAD(, QueryReport) report_pool;
+    QueryReport *report_pool_entries;
+    uint64_t *query_results;
 
     SurfaceFormatInfo kelvin_surface_zeta_vk_map[3];
 
@@ -485,6 +517,7 @@ void pgraph_vk_init_command_buffers(PGRAPHState *pg);
 void pgraph_vk_finalize_command_buffers(PGRAPHState *pg);
 VkCommandBuffer pgraph_vk_begin_single_time_commands(PGRAPHState *pg);
 void pgraph_vk_end_single_time_commands(PGRAPHState *pg, VkCommandBuffer cmd);
+VkCommandBuffer pgraph_vk_ensure_nondraw_commands(PGRAPHState *pg);
 
 // image.c
 void pgraph_vk_transition_image_layout(PGRAPHState *pg, VkCommandBuffer cmd,
@@ -538,6 +571,11 @@ void pgraph_vk_pack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
 void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                     VkCommandBuffer cmd, VkBuffer src,
                                     VkBuffer dst);
+void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
+                                VkBuffer src, size_t src_size,
+                                VkBuffer dst, size_t dst_size,
+                                unsigned int width, unsigned int height,
+                                bool unswizzle);
 
 // display.c
 void pgraph_vk_init_display(PGRAPHState *pg);

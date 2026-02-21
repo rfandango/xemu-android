@@ -91,65 +91,32 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
         return;
     }
 
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: command_buffers");
-#endif
+    VK_LOG("init: command_buffers");
     pgraph_vk_init_command_buffers(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: buffers");
-#endif
+    VK_LOG("init: buffers");
     if (!pgraph_vk_init_buffers(d, errp)) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
-                            "vk init stage: buffers failed");
-#endif
+        VK_LOG_ERROR("init: buffers FAILED");
         return;
     }
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: surfaces");
-#endif
+    VK_LOG("init: surfaces");
     pgraph_vk_init_surfaces(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: shaders");
-#endif
+    VK_LOG("init: shaders");
     pgraph_vk_init_shaders(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: pipelines");
-#endif
+    VK_LOG("init: pipelines");
     pgraph_vk_init_pipelines(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: textures");
-#endif
+    VK_LOG("init: textures");
     pgraph_vk_init_textures(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: reports");
-#endif
+    VK_LOG("init: reports");
     pgraph_vk_init_reports(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: compute");
-#endif
+    VK_LOG("init: compute");
     pgraph_vk_init_compute(pg);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: display");
-#endif
+    VK_LOG("init: display");
     pgraph_vk_init_display(pg);
 
     pgraph_vk_update_vertex_ram_buffer(&d->pgraph, 0, d->vram_ptr,
                                    memory_region_size(d->vram));
 
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "vk init stage: renderer_ready");
-#endif
+    VK_LOG("init: renderer_ready");
 
 }
 

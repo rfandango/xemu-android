@@ -150,6 +150,11 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    VK_LOG("download_surface: %s addr=0x%x %ux%u pitch=%d bpp=%d swizzle=%d",
+           surface->color ? "COLOR" : "ZETA", surface->vram_addr,
+           surface->width, surface->height, surface->pitch,
+           surface->fmt.bytes_per_pixel, surface->swizzle);
+
     if (!surface->width || !surface->height) {
         return;
     }
@@ -160,14 +165,20 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
         surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
 
+    bool use_compute_to_swizzle = OPT_COMPUTE_SWIZZLE &&
+                                   surface->swizzle &&
+                                   surface->fmt.bytes_per_pixel == 4 &&
+                                   !use_compute_to_convert_depth_stencil_format;
+
     bool no_conversion_necessary =
         surface->color || use_compute_to_convert_depth_stencil_format ||
         surface->host_fmt.vk_format == VK_FORMAT_D16_UNORM;
 
     assert(no_conversion_necessary);
 
-    bool compute_needs_finish = (use_compute_to_convert_depth_stencil_format &&
-                                 pgraph_vk_compute_needs_finish(r));
+    bool compute_needs_finish =
+        ((use_compute_to_convert_depth_stencil_format || use_compute_to_swizzle)
+         && pgraph_vk_compute_needs_finish(r));
 
     if (r->in_command_buffer &&
         surface->draw_time >= r->command_buffer_start_time) {
@@ -188,8 +199,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     uint8_t *gl_read_buf = pixels;
 
     uint8_t *swizzle_buf = pixels;
-    if (surface->swizzle) {
-        // FIXME: Swizzle in shader
+    if (surface->swizzle && !use_compute_to_swizzle) {
         assert(pg->surface_scale_factor == 1 || downscale);
         swizzle_buf = (uint8_t *)g_malloc(surface->size);
         gl_read_buf = swizzle_buf;
@@ -288,11 +298,13 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     assert((downloaded_image_size) <=
            r->storage_buffers[BUFFER_STAGING_DST].buffer_size);
 
-    int copy_buffer_idx = use_compute_to_convert_depth_stencil_format ?
-                             BUFFER_COMPUTE_DST :
-                             BUFFER_STAGING_DST;
+    bool use_compute_buffer = use_compute_to_convert_depth_stencil_format ||
+                              use_compute_to_swizzle;
+    int copy_buffer_idx = use_compute_buffer ? BUFFER_COMPUTE_DST :
+                                               BUFFER_STAGING_DST;
     VkBuffer copy_buffer = r->storage_buffers[copy_buffer_idx].buffer;
 
+    size_t copy_buffer_size = r->storage_buffers[copy_buffer_idx].buffer_size;
     {
         VkBufferMemoryBarrier pre_copy_dst_barrier = {
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -301,7 +313,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = copy_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = copy_buffer_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -337,7 +349,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = copy_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = copy_buffer_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
@@ -352,7 +364,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = pack_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
@@ -368,7 +380,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = copy_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = copy_buffer_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -400,7 +412,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = copy_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -418,11 +430,80 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = pack_buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
                              &post_copy_src_barrier, 0, NULL);
+    }
+
+    if (use_compute_to_swizzle) {
+        size_t swizzle_size = surface->width * surface->height *
+                              surface->fmt.bytes_per_pixel;
+        VkBuffer swizzle_src = r->storage_buffers[BUFFER_COMPUTE_DST].buffer;
+        VkBuffer swizzle_dst = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer;
+
+        VkBufferMemoryBarrier pre_swizzle_barriers[2] = {
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = swizzle_src,
+                .size = swizzle_size,
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = swizzle_dst,
+                .size = swizzle_size,
+            },
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
+                             2, pre_swizzle_barriers, 0, NULL);
+
+        pgraph_vk_compute_swizzle(pg, cmd, swizzle_src, swizzle_size,
+                                   swizzle_dst, swizzle_size,
+                                   surface->width, surface->height, false);
+
+        VkBufferMemoryBarrier post_swizzle_barrier = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = swizzle_dst,
+            .size = swizzle_size,
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
+                             &post_swizzle_barrier, 0, NULL);
+
+        copy_buffer = r->storage_buffers[BUFFER_STAGING_DST].buffer;
+
+        VkBufferMemoryBarrier pre_copy_staging_barrier = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = copy_buffer,
+            .size = swizzle_size,
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
+                             &pre_copy_staging_barrier, 0, NULL);
+
+        VkBufferCopy buffer_copy_region = { .size = swizzle_size };
+        vkCmdCopyBuffer(cmd, swizzle_dst, copy_buffer, 1,
+                        &buffer_copy_region);
+
+        downloaded_image_size = swizzle_size;
     }
 
     //
@@ -436,7 +517,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = copy_buffer,
-        .size = VK_WHOLE_SIZE
+        .size = downloaded_image_size
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1,
@@ -446,28 +527,26 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     pgraph_vk_end_debug_marker(r, cmd);
     pgraph_vk_end_single_time_commands(pg, cmd);
 
-    void *mapped_memory_ptr = NULL;
-    VK_CHECK(vmaMapMemory(r->allocator,
-                          r->storage_buffers[BUFFER_STAGING_DST].allocation,
-                          &mapped_memory_ptr));
+    void *mapped_memory_ptr = r->storage_buffers[BUFFER_STAGING_DST].mapped;
 
     vmaInvalidateAllocation(r->allocator,
                             r->storage_buffers[BUFFER_STAGING_DST].allocation,
-                            0, VK_WHOLE_SIZE);
+                            0, downloaded_image_size);
 
-    memcpy_image(gl_read_buf, mapped_memory_ptr, surface->pitch,
-                 surface->width * surface->fmt.bytes_per_pixel,
-                 surface->height);
-
-    vmaUnmapMemory(r->allocator,
-                   r->storage_buffers[BUFFER_STAGING_DST].allocation);
-
-    if (surface->swizzle) {
-        // FIXME: Swizzle in shader
-        swizzle_rect(swizzle_buf, surface->width, surface->height, pixels,
-                     surface->pitch, surface->fmt.bytes_per_pixel);
+    if (use_compute_to_swizzle) {
+        memcpy(pixels, mapped_memory_ptr, downloaded_image_size);
         nv2a_profile_inc_counter(NV2A_PROF_SURF_SWIZZLE);
-        g_free(swizzle_buf);
+    } else {
+        memcpy_image(gl_read_buf, mapped_memory_ptr, surface->pitch,
+                     surface->width * surface->fmt.bytes_per_pixel,
+                     surface->height);
+
+        if (surface->swizzle) {
+            swizzle_rect(swizzle_buf, surface->width, surface->height, pixels,
+                         surface->pitch, surface->fmt.bytes_per_pixel);
+            nv2a_profile_inc_counter(NV2A_PROF_SURF_SWIZZLE);
+            g_free(swizzle_buf);
+        }
     }
 }
 
@@ -613,13 +692,20 @@ static void unregister_cpu_access_callback(NV2AState *d,
 
 static void bind_surface(PGRAPHVkState *r, SurfaceBinding *surface)
 {
+    VK_LOG("bind_surface: %s addr=0x%x %ux%u fmt=%d",
+           surface->color ? "COLOR" : "ZETA", surface->vram_addr,
+           surface->width, surface->height, surface->host_fmt.vk_format);
+
     if (surface->color) {
         r->color_binding = surface;
+        r->color_drawn_in_cb = false;
     } else {
         r->zeta_binding = surface;
+        r->zeta_drawn_in_cb = false;
     }
 
     r->framebuffer_dirty = true;
+    r->pipeline_state_dirty = true;
 }
 
 static void unbind_surface(NV2AState *d, bool color)
@@ -964,6 +1050,11 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         return;
     }
 
+    VK_LOG("upload_surface: %s addr=0x%x %ux%u pitch=%d bpp=%d swizzle=%d",
+           surface->color ? "COLOR" : "ZETA", surface->vram_addr,
+           surface->width, surface->height, surface->pitch,
+           surface->fmt.bytes_per_pixel, surface->swizzle);
+
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
 
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE); // FIXME: SURFACE_UP
@@ -985,10 +1076,24 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     uint8_t *data = d->vram_ptr;
     uint8_t *buf = data + surface->vram_addr;
 
+    bool use_compute_to_convert_depth_stencil_format =
+        surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
+        surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+
+    bool use_compute_to_unswizzle = OPT_COMPUTE_SWIZZLE &&
+                                     surface->swizzle &&
+                                     surface->fmt.bytes_per_pixel == 4 &&
+                                     !use_compute_to_convert_depth_stencil_format;
+
+    bool no_conversion_necessary =
+        surface->color || surface->host_fmt.vk_format == VK_FORMAT_D16_UNORM ||
+        use_compute_to_convert_depth_stencil_format;
+    assert(no_conversion_necessary);
+
     g_autofree uint8_t *swizzle_buf = NULL;
     uint8_t *gl_read_buf = NULL;
 
-    if (surface->swizzle) {
+    if (surface->swizzle && !use_compute_to_unswizzle) {
         swizzle_buf = (uint8_t*)g_malloc(surface->size);
         gl_read_buf = swizzle_buf;
         unswizzle_rect(data + surface->vram_addr,
@@ -1010,25 +1115,18 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
                                  surface->fmt.bytes_per_pixel;
     assert(uploaded_image_size <= copy_buffer->buffer_size);
 
-    void *mapped_memory_ptr = NULL;
-    VK_CHECK(vmaMapMemory(r->allocator, copy_buffer->allocation,
-                          &mapped_memory_ptr));
+    void *mapped_memory_ptr = copy_buffer->mapped;
 
-    bool use_compute_to_convert_depth_stencil_format =
-        surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
-        surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    if (use_compute_to_unswizzle) {
+        memcpy(mapped_memory_ptr, buf, uploaded_image_size);
+    } else {
+        memcpy_image(mapped_memory_ptr, gl_read_buf,
+                     surface->width * surface->fmt.bytes_per_pixel,
+                     surface->pitch, surface->height);
+    }
 
-    bool no_conversion_necessary =
-        surface->color || surface->host_fmt.vk_format == VK_FORMAT_D16_UNORM ||
-        use_compute_to_convert_depth_stencil_format;
-    assert(no_conversion_necessary);
-
-    memcpy_image(mapped_memory_ptr, gl_read_buf,
-                 surface->width * surface->fmt.bytes_per_pixel, surface->pitch,
-                 surface->height);
-
-    vmaFlushAllocation(r->allocator, copy_buffer->allocation, 0, VK_WHOLE_SIZE);
-    vmaUnmapMemory(r->allocator, copy_buffer->allocation);
+    vmaFlushAllocation(r->allocator, copy_buffer->allocation, 0,
+                       uploaded_image_size);
 
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_RED, __func__);
@@ -1040,7 +1138,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = copy_buffer->buffer,
-        .size = VK_WHOLE_SIZE
+        .size = uploaded_image_size
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -1098,7 +1196,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = copy_buffer->buffer,
-            .size = VK_WHOLE_SIZE
+            .size = uploaded_image_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -1115,7 +1213,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
@@ -1147,7 +1245,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -1176,6 +1274,62 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         copy_buffer = unpack_buffer;
     }
 
+    if (use_compute_to_unswizzle) {
+        size_t swizzle_size = uploaded_image_size;
+
+        VkBufferCopy buf_copy = { .size = swizzle_size };
+        vkCmdCopyBuffer(cmd, copy_buffer->buffer,
+                        r->storage_buffers[BUFFER_COMPUTE_DST].buffer, 1,
+                        &buf_copy);
+
+        VkBuffer unsw_src = r->storage_buffers[BUFFER_COMPUTE_DST].buffer;
+        VkBuffer unsw_dst = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer;
+
+        VkBufferMemoryBarrier pre_unsw_barriers[2] = {
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = unsw_src,
+                .size = swizzle_size,
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = unsw_dst,
+                .size = swizzle_size,
+            },
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
+                             2, pre_unsw_barriers, 0, NULL);
+
+        pgraph_vk_compute_swizzle(pg, cmd, unsw_src, swizzle_size,
+                                   unsw_dst, swizzle_size,
+                                   surface->width, surface->height, true);
+
+        VkBufferMemoryBarrier post_unsw_barrier = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = unsw_dst,
+            .size = swizzle_size,
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
+                             &post_unsw_barrier, 0, NULL);
+
+        copy_buffer = &r->storage_buffers[BUFFER_COMPUTE_SRC];
+        nv2a_profile_inc_counter(NV2A_PROF_SURF_SWIZZLE);
+    }
+
     //
     // Copy image data from buffer to staging image
     //
@@ -1201,7 +1355,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = copy_buffer->buffer,
-        .size = VK_WHOLE_SIZE
+        .size = copy_buffer->buffer_size
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -1591,6 +1745,9 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+    VK_LOG("surface_update: upload=%d color_w=%d zeta_w=%d clearing=%d",
+           upload, color_write, zeta_write, pg->clearing);
 
     pg->surface_shape.z_format =
         GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER),

@@ -141,6 +141,10 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    VK_LOG("update_descriptor_sets: ds_idx=%d shader_changed=%d tex_changed=%d",
+           r->descriptor_set_index, r->shader_bindings_changed,
+           r->texture_bindings_changed);
+
     bool need_uniform_write =
         r->uniforms_changed ||
         !r->storage_buffers[BUFFER_UNIFORM_STAGING].buffer_offset;
@@ -507,6 +511,7 @@ void pgraph_vk_bind_shaders(PGRAPHState *pg)
                                          sizeof(ShaderState))) {
             r->shader_binding = get_shader_binding_for_state(r, &new_state);
             r->shader_bindings_changed = true;
+            r->pipeline_state_dirty = true;
         }
     } else {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND_NOTDIRTY);

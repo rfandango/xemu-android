@@ -23,11 +23,7 @@
 #include "renderer.h"
 #include <vulkan/vulkan_core.h>
 
-// TODO: Swizzle/Unswizzle
 // TODO: Float depth format (low priority, but would be better for accuracy)
-
-// FIXME: Below pipeline creation assumes identical 3 buffer setup. For
-//        swizzle shader we will need more flexibility.
 
 const char *pack_d24_unorm_s8_uint_to_z24s8_glsl =
     "layout(push_constant) uniform PushConstants { uint width_in, width_out; };\n"
@@ -117,6 +113,45 @@ const char *unpack_z24s8_to_d32_sfloat_s8_uint_glsl =
     "       stencil_out[idx_out / 4] = stencil_value;\n"
     "    }\n"
     "}\n";
+
+static const char *swizzle_common_glsl =
+    "layout(push_constant) uniform PushConstants { uint width, height, mask_x, mask_y; };\n"
+    "layout(set = 0, binding = 0) buffer DstBuf { uint dst_data[]; };\n"
+    "layout(set = 0, binding = 1) buffer Unused { uint unused_data[]; };\n"
+    "layout(set = 0, binding = 2) buffer SrcBuf { uint src_data[]; };\n"
+    "uint swizzle_addr(uint x, uint y) {\n"
+    "    uint addr = 0u;\n"
+    "    uint mx = mask_x, my = mask_y;\n"
+    "    for (uint bit = 1u; (mx | my) != 0u; bit <<= 1u, mx >>= 1u, my >>= 1u) {\n"
+    "        if ((mx & 1u) != 0u) { addr |= (x & 1u) * bit; x >>= 1u; }\n"
+    "        if ((my & 1u) != 0u) { addr |= (y & 1u) * bit; y >>= 1u; }\n"
+    "    }\n"
+    "    return addr;\n"
+    "}\n";
+
+static const char *swizzle_main_glsl =
+    "void main() {\n"
+    "    uint idx = gl_GlobalInvocationID.x;\n"
+    "    if (idx >= width * height) return;\n"
+    "    dst_data[swizzle_addr(idx % width, idx / width)] = src_data[idx];\n"
+    "}\n";
+
+static const char *unswizzle_main_glsl =
+    "void main() {\n"
+    "    uint idx = gl_GlobalInvocationID.x;\n"
+    "    if (idx >= width * height) return;\n"
+    "    dst_data[idx] = src_data[swizzle_addr(idx % width, idx / width)];\n"
+    "}\n";
+
+static gchar *get_swizzle_shader_glsl(ComputeType type, int workgroup_size)
+{
+    const char *main_body = (type == COMPUTE_TYPE_SWIZZLE) ?
+                            swizzle_main_glsl : unswizzle_main_glsl;
+    return g_strdup_printf(
+        "#version 450\n"
+        "layout(local_size_x = %d, local_size_y = 1, local_size_z = 1) in;\n"
+        "%s%s", workgroup_size, swizzle_common_glsl, main_body);
+}
 
 static gchar *get_compute_shader_glsl(VkFormat host_fmt, bool pack,
                                       int workgroup_size)
@@ -246,7 +281,7 @@ static void create_compute_pipeline_layout(PGRAPHState *pg)
 
     VkPushConstantRange push_constant_range = {
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-        .size = 2 * sizeof(uint32_t),
+        .size = 4 * sizeof(uint32_t),
     };
     VkPipelineLayoutCreateInfo pipeline_layout_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -342,6 +377,7 @@ static int get_workgroup_size_for_output_units(PGRAPHVkState *r, int output_unit
 
     while (group_size > 1) {
         if (group_size > r->device_props.limits.maxComputeWorkGroupSize[0]) {
+            group_size /= 2;
             continue;
         }
         if (output_units % group_size == 0) {
@@ -382,6 +418,10 @@ void pgraph_vk_pack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                   VkBuffer dst, bool downscale)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+    VK_LOG("pack_depth_stencil: %ux%u fmt=%d downscale=%d",
+           surface->width, surface->height,
+           surface->host_fmt.vk_format, downscale);
 
     unsigned int input_width = surface->width, input_height = surface->height;
     pgraph_apply_scaling_factor(pg, &input_width, &input_height);
@@ -442,8 +482,7 @@ void pgraph_vk_pack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
         &r->compute.descriptor_sets[r->compute.descriptor_set_index - 1], 0,
         NULL);
 
-    uint32_t push_constants[2] = { input_width, output_width };
-    assert(sizeof(push_constants) == 8);
+    uint32_t push_constants[4] = { input_width, output_width, 0, 0 };
     vkCmdPushConstants(cmd, r->compute.pipeline_layout,
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
                        push_constants);
@@ -459,6 +498,10 @@ void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                     VkBuffer dst)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+    VK_LOG("unpack_depth_stencil: %ux%u fmt=%d",
+           surface->width, surface->height,
+           surface->host_fmt.vk_format);
 
     unsigned int input_width = surface->width, input_height = surface->height;
 
@@ -516,11 +559,70 @@ void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
         NULL);
 
     assert(output_width >= input_width);
-    uint32_t push_constants[2] = { input_width, output_width };
-    assert(sizeof(push_constants) == 8);
+    uint32_t push_constants[4] = { input_width, output_width, 0, 0 };
     vkCmdPushConstants(cmd, r->compute.pipeline_layout,
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
                        push_constants);
+    vkCmdDispatch(cmd, group_count, 1, 1);
+    pgraph_vk_end_debug_marker(r, cmd);
+}
+
+void pgraph_vk_compute_swizzle(PGRAPHState *pg, VkCommandBuffer cmd,
+                                VkBuffer src, size_t src_size,
+                                VkBuffer dst, size_t dst_size,
+                                unsigned int width, unsigned int height,
+                                bool unswizzle)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    VK_LOG("compute_swizzle: %s %ux%u src_size=%zu dst_size=%zu",
+           unswizzle ? "UNSWIZZLE" : "SWIZZLE", width, height,
+           src_size, dst_size);
+
+    uint32_t mask_x = 0, mask_y = 0;
+    uint32_t bit = 1, mask_bit = 1;
+    bool done;
+    do {
+        done = true;
+        if (bit < width) { mask_x |= mask_bit; mask_bit <<= 1; done = false; }
+        if (bit < height) { mask_y |= mask_bit; mask_bit <<= 1; done = false; }
+        bit <<= 1;
+    } while (!done);
+
+    VkDescriptorBufferInfo buffers[] = {
+        { .buffer = dst, .offset = 0, .range = dst_size },
+        { .buffer = dst, .offset = 0, .range = dst_size },
+        { .buffer = src, .offset = 0, .range = src_size },
+    };
+    update_descriptor_sets(pg, buffers, ARRAY_SIZE(buffers));
+
+    size_t output_units = width * height;
+
+    ComputePipelineKey key;
+    memset(&key, 0, sizeof(key));
+    key.compute_type = unswizzle ? COMPUTE_TYPE_UNSWIZZLE : COMPUTE_TYPE_SWIZZLE;
+    key.workgroup_size = get_workgroup_size_for_output_units(r, output_units);
+
+    LruNode *node = lru_lookup(&r->compute.pipeline_cache,
+                      fast_hash((void *)&key, sizeof(key)), &key);
+    ComputePipeline *pipeline = container_of(node, ComputePipeline, node);
+    assert(pipeline);
+
+    size_t workgroup_size_in_units = pipeline->key.workgroup_size;
+    size_t group_count = output_units / workgroup_size_in_units;
+
+    pgraph_vk_begin_debug_marker(r, cmd, RGBA_PINK, __func__);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_COMPUTE, r->compute.pipeline_layout, 0, 1,
+        &r->compute.descriptor_sets[r->compute.descriptor_set_index - 1], 0,
+        NULL);
+
+    uint32_t push_constants[4] = { width, height, mask_x, mask_y };
+    vkCmdPushConstants(cmd, r->compute.pipeline_layout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                       push_constants);
+
     vkCmdDispatch(cmd, group_count, 1, 1);
     pgraph_vk_end_debug_marker(r, cmd);
 }
@@ -538,8 +640,18 @@ static void pipeline_cache_entry_init(Lru *lru, LruNode *node,
                 "Warning: Needed compute shader with workgroup size = 1\n");
     }
 
-    gchar *glsl = get_compute_shader_glsl(
-        snode->key.host_fmt, snode->key.pack, snode->key.workgroup_size);
+    gchar *glsl;
+    switch (snode->key.compute_type) {
+    case COMPUTE_TYPE_SWIZZLE:
+    case COMPUTE_TYPE_UNSWIZZLE:
+        glsl = get_swizzle_shader_glsl(snode->key.compute_type,
+                                       snode->key.workgroup_size);
+        break;
+    default:
+        glsl = get_compute_shader_glsl(snode->key.host_fmt, snode->key.pack,
+                                       snode->key.workgroup_size);
+        break;
+    }
     assert(glsl);
     snode->pipeline = create_compute_pipeline(r, glsl);
     g_free(glsl);
@@ -590,11 +702,13 @@ void pgraph_vk_init_compute(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    VK_LOG("init_compute: begin");
     create_descriptor_pool(pg);
     create_descriptor_set_layout(pg);
     create_descriptor_sets(pg);
     create_compute_pipeline_layout(pg);
     pipeline_cache_init(r);
+    VK_LOG("init_compute: done");
 }
 
 void pgraph_vk_finalize_compute(PGRAPHState *pg)

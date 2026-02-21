@@ -20,6 +20,23 @@
 #ifndef HW_XBOX_NV2A_PGRAPH_VK_DEBUG_H
 #define HW_XBOX_NV2A_PGRAPH_VK_DEBUG_H
 
+#define VK_LOG_VERBOSE 0
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#if VK_LOG_VERBOSE
+#define VK_LOG(fmt, ...) \
+    __android_log_print(ANDROID_LOG_INFO, "xemu-vk", fmt, ##__VA_ARGS__)
+#else
+#define VK_LOG(fmt, ...) do { } while (0)
+#endif
+#define VK_LOG_ERROR(fmt, ...) \
+    __android_log_print(ANDROID_LOG_ERROR, "xemu-vk", fmt, ##__VA_ARGS__)
+#else
+#define VK_LOG(fmt, ...) do { } while (0)
+#define VK_LOG_ERROR(fmt, ...) do { fprintf(stderr, "xemu-vk: " fmt "\n", ##__VA_ARGS__); } while (0)
+#endif
+
 #define DEBUG_VK 0
 
 extern int nv2a_vk_dgroup_indent;
@@ -46,13 +63,16 @@ extern int nv2a_vk_dgroup_indent;
         assert(nv2a_vk_dgroup_indent >= 0); \
     } while (0)
 
-#define VK_CHECK(x)                                           \
-    do {                                                      \
-        VkResult vk_result = (x);                             \
-        if (vk_result != VK_SUCCESS) {                        \
-            fprintf(stderr, "vk_result = %d\n", vk_result);   \
-        }                                                     \
-        assert(vk_result == VK_SUCCESS && "vk check failed"); \
+#define VK_CHECK(x)                                                            \
+    do {                                                                       \
+        VkResult vk_result = (x);                                              \
+        if (vk_result != VK_SUCCESS) {                                         \
+            VK_LOG_ERROR("VK_CHECK FAILED: %s = %d at %s:%d",                  \
+                         #x, vk_result, __FILE__, __LINE__);                   \
+            fprintf(stderr, "VK_CHECK FAILED: %s = %d at %s:%d\n",            \
+                    #x, vk_result, __FILE__, __LINE__);                        \
+        }                                                                      \
+        assert(vk_result == VK_SUCCESS && "vk check failed");                  \
     } while (0)
 
 void pgraph_vk_debug_frame_terminator(void);

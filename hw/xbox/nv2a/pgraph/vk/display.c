@@ -188,25 +188,17 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
 
     // FIXME: Dirty tracking. We don't necessarily need to upload so much.
 
-    // Copy texture data to mapped device buffer
-    uint8_t *mapped_memory_ptr;
-
-    VK_CHECK(vmaMapMemory(r->allocator,
-                          r->storage_buffers[BUFFER_STAGING_SRC].allocation,
-                          (void *)&mapped_memory_ptr));
+    uint8_t *mapped_memory_ptr =
+        (uint8_t *)r->storage_buffers[BUFFER_STAGING_SRC].mapped;
 
     convert_texture_data__CR8YB8CB8YA8(
         mapped_memory_ptr, d->vram_ptr + state.base + state.offset,
         state.in_width, state.in_height, state.pitch);
 
+    size_t display_data_size = state.in_width * state.in_height * 4;
     vmaFlushAllocation(r->allocator,
                        r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
-
-    vmaUnmapMemory(r->allocator,
-                   r->storage_buffers[BUFFER_STAGING_SRC].allocation);
-
-    // FIXME: Merge with display renderer command buffer
+                       display_data_size);
 
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
 
@@ -217,7 +209,7 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
-        .size = VK_WHOLE_SIZE
+        .size = display_data_size
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,

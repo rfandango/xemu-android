@@ -37,6 +37,7 @@ void pgraph_vk_transition_image_layout(PGRAPHState *pg, VkCommandBuffer cmd,
                                        VkImageLayout oldLayout,
                                        VkImageLayout newLayout)
 {
+    VK_LOG("image_layout_transition: fmt=%d old=%d new=%d", format, oldLayout, newLayout);
     VkImageMemoryBarrier barrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout = oldLayout,
@@ -148,7 +149,11 @@ void pgraph_vk_transition_image_layout(PGRAPHState *pg, VkCommandBuffer cmd,
                newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+#if OPT_PRECISE_BARRIERS
+        sourceStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+#else
         sourceStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+#endif
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
     // Color -> Shader Read

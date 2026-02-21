@@ -482,6 +482,10 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     TextureShape *state = &binding->key.state;
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
+    VK_LOG("upload_texture: idx=%d fmt=%d %ux%u cubemap=%d levels=%d",
+           texture_idx, state->color_format, state->width, state->height,
+           state->cubemap, state->levels);
+
     nv2a_profile_inc_counter(NV2A_PROF_TEX_UPLOAD);
 
     g_autofree TextureLayout *layout = get_texture_layout(pg, texture_idx);
@@ -501,12 +505,8 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     assert(texture_data_size <=
            r->storage_buffers[BUFFER_STAGING_SRC].buffer_size);
 
-    // Copy texture data to mapped device buffer
-    uint8_t *mapped_memory_ptr;
-
-    VK_CHECK(vmaMapMemory(r->allocator,
-                          r->storage_buffers[BUFFER_STAGING_SRC].allocation,
-                          (void *)&mapped_memory_ptr));
+    uint8_t *mapped_memory_ptr =
+        (uint8_t *)r->storage_buffers[BUFFER_STAGING_SRC].mapped;
 
     int num_regions = num_layers * state->levels;
     g_autofree VkBufferImageCopy *regions =
@@ -545,13 +545,13 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     vmaFlushAllocation(r->allocator,
                        r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
+                       buffer_offset);
 
-    vmaUnmapMemory(r->allocator,
-                   r->storage_buffers[BUFFER_STAGING_SRC].allocation);
-
-    // FIXME: Use nondraw. Need to fill and copy tex buffer at once
+#if OPT_TEX_NONDRAW_CMD
+    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+#else
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     VkBufferMemoryBarrier host_barrier = {
@@ -561,7 +561,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
-        .size = VK_WHOLE_SIZE
+        .size = buffer_offset
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -583,7 +583,11 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_4);
     pgraph_vk_end_debug_marker(r, cmd);
+#if OPT_TEX_NONDRAW_CMD
+    pgraph_vk_end_nondraw_commands(pg, cmd);
+#else
     pgraph_vk_end_single_time_commands(pg, cmd);
+#endif
 
     // Release decoded texture data
     for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
@@ -618,7 +622,11 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     trace_nv2a_pgraph_surface_render_to_texture(
         surface->vram_addr, surface->width, surface->height);
 
+#if OPT_TEX_NONDRAW_CMD
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+#else
+    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     unsigned int scaled_width = surface->width,
@@ -682,9 +690,9 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     VkBuffer texture_source_buffer;
+    size_t packed_image_size = scaled_width * scaled_height * 4;
 
     if (use_compute_to_convert_depth_stencil) {
-        size_t packed_image_size = scaled_width * scaled_height * 4;
 
         VkBufferMemoryBarrier pre_pack_src_barrier = {
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -693,7 +701,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_image_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
@@ -706,7 +714,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = r->storage_buffers[BUFFER_COMPUTE_SRC].buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_image_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
@@ -724,7 +732,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = r->storage_buffers[BUFFER_COMPUTE_DST].buffer,
-            .size = VK_WHOLE_SIZE
+            .size = packed_image_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -752,7 +760,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = dst_storage_buffer->buffer,
-            .size = VK_WHOLE_SIZE
+            .size = copied_image_size
         };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
@@ -781,6 +789,8 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         cmd, texture_source_buffer, texture->image,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, regions);
 
+    size_t texture_data_max_size = use_compute_to_convert_depth_stencil ?
+        packed_image_size : copied_image_size;
     VkBufferMemoryBarrier post_copy_barrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
@@ -788,7 +798,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = texture_source_buffer,
-        .size = VK_WHOLE_SIZE
+        .size = texture_data_max_size
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -800,7 +810,11 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     texture->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     pgraph_vk_end_debug_marker(r, cmd);
+#if OPT_TEX_NONDRAW_CMD
     pgraph_vk_end_nondraw_commands(pg, cmd);
+#else
+    pgraph_vk_end_single_time_commands(pg, cmd);
+#endif
 
     texture->draw_time = surface->draw_time;
 }
@@ -823,7 +837,11 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     trace_nv2a_pgraph_surface_render_to_texture(
         surface->vram_addr, surface->width, surface->height);
 
+#if OPT_TEX_NONDRAW_CMD
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+#else
+    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+#endif
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     pgraph_vk_transition_image_layout(
@@ -864,7 +882,11 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     texture->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     pgraph_vk_end_debug_marker(r, cmd);
+#if OPT_TEX_NONDRAW_CMD
     pgraph_vk_end_nondraw_commands(pg, cmd);
+#else
+    pgraph_vk_end_single_time_commands(pg, cmd);
+#endif
 
     texture->draw_time = surface->draw_time;
 }
@@ -981,17 +1003,12 @@ static void create_dummy_texture(PGRAPHState *pg)
     size_t texture_data_size =
         image_create_info.extent.width * image_create_info.extent.height;
 
-    VK_CHECK(vmaMapMemory(r->allocator,
-                          r->storage_buffers[BUFFER_STAGING_SRC].allocation,
-                          (void *)&mapped_memory_ptr));
+    mapped_memory_ptr = (uint8_t *)r->storage_buffers[BUFFER_STAGING_SRC].mapped;
     memset(mapped_memory_ptr, 0xff, texture_data_size);
 
     vmaFlushAllocation(r->allocator,
                        r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
-
-    vmaUnmapMemory(r->allocator,
-                   r->storage_buffers[BUFFER_STAGING_SRC].allocation);
+                       texture_data_size);
 
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
@@ -1071,6 +1088,7 @@ static bool is_linear_filter_supported_for_format(PGRAPHVkState *r,
 
 static void create_texture(PGRAPHState *pg, int texture_idx)
 {
+    VK_LOG("create_texture: idx=%d", texture_idx);
     NV2A_VK_DGROUP_BEGIN("Creating texture %d", texture_idx);
 
     NV2AState *d = container_of(pg, NV2AState, pgraph);
@@ -1440,6 +1458,7 @@ void pgraph_vk_bind_textures(NV2AState *d)
     }
 
     r->texture_bindings_changed = true;
+    r->pipeline_state_dirty = true;
     update_timestamps(r);
     NV2A_VK_DGROUP_END();
 }
