@@ -344,16 +344,38 @@ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
 #else
 
 #ifdef XBOX
-    /* Timers are facilitated by this function. Busy-wait if the deadline is
-     * near, to avoid missing deadlines due to costly sleeps.
+    /*
+     * Timers are facilitated by this function.  For short deadlines, use a
+     * hybrid approach: yield the CPU for the bulk of the wait via nanosleep,
+     * then busy-wait only for the final stretch to avoid oversleeping.
      */
-    #define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
+    #define XBOX_BUSYWAIT_THRESHOLD_NS  1250000
+    #define XBOX_BUSYWAIT_TAIL_NS        150000   /* busy-wait last 150 µs */
     if ((0 < timeout) && (timeout < XBOX_BUSYWAIT_THRESHOLD_NS)) {
+        if (timeout > XBOX_BUSYWAIT_TAIL_NS) {
+            struct timespec ts_sleep;
+            int64_t sleep_ns = timeout - XBOX_BUSYWAIT_TAIL_NS;
+            ts_sleep.tv_sec = 0;
+            ts_sleep.tv_nsec = sleep_ns;
+            nanosleep(&ts_sleep, NULL);
+        }
+#if defined(__aarch64__)
+        uint64_t freq, start, ticks_to_wait;
+        asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+        asm volatile("mrs %0, cntvct_el0" : "=r"(start));
+        ticks_to_wait = (uint64_t)XBOX_BUSYWAIT_TAIL_NS * freq / 1000000000ULL;
+        uint64_t end_tick = start + ticks_to_wait;
+        uint64_t now_tick;
+        do {
+            asm volatile("mrs %0, cntvct_el0" : "=r"(now_tick));
+        } while (now_tick < end_tick);
+#else
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        int64_t end = now + timeout;
+        int64_t end = now + XBOX_BUSYWAIT_TAIL_NS;
         while (now < end) {
             now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         }
+#endif
         timeout = 0;
     }
 #endif

@@ -75,12 +75,12 @@ static void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
         /* the bits of the interrupts to clear are written */
         qatomic_and(&d->regs[NV_PAPU_ISTS], ~val);
         update_irq(d);
-        qemu_cond_broadcast(&d->cond);
+        qemu_cond_signal(&d->cond);
         break;
     case NV_PAPU_FECTL:
     case NV_PAPU_SECTL:
         qatomic_set(&d->regs[addr], val);
-        qemu_cond_broadcast(&d->cond);
+        qemu_cond_signal(&d->cond);
         break;
     case NV_PAPU_FEMEMDATA:
         /* 'magic write'

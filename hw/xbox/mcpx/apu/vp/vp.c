@@ -141,7 +141,9 @@ static void voice_lock(MCPXAPUState *d, uint16_t v, bool lock)
         d->vp.voice_locked[v / 64] &= ~mask;
     }
     qemu_spin_unlock(&d->vp.voice_spinlocks[v]);
-    qemu_cond_broadcast(&d->cond);
+    if (!lock) {
+        qemu_cond_signal(&d->cond);
+    }
 }
 
 static bool is_voice_locked(MCPXAPUState *d, uint16_t v)
@@ -660,15 +662,13 @@ const MemoryRegionOps vp_ops = {
     .write = vp_write,
 };
 
-static hwaddr get_data_ptr(hwaddr sge_base, unsigned int max_sge, uint32_t addr)
+static hwaddr get_data_ptr(MCPXAPUState *d, hwaddr sge_base,
+                           unsigned int max_sge, uint32_t addr)
 {
     unsigned int entry = addr / TARGET_PAGE_SIZE;
     assert(entry <= max_sge);
-    uint32_t prd_address =
-        ldl_le_phys(&address_space_memory, sge_base + entry * 4 * 2);
-    // uint32_t prd_control =
-    //     ldl_le_phys(&address_space_memory, sge_base + entry * 4 * 2 + 4);
-    DPRINTF("Addr: 0x%08X, control: 0x%08X\n", prd_address, prd_control);
+    uint32_t prd_address = ldl_le_p(&d->ram_ptr[sge_base + entry * 8]);
+    DPRINTF("Addr: 0x%08X\n", prd_address);
     return prd_address + addr % TARGET_PAGE_SIZE;
 }
 
@@ -1022,10 +1022,9 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                     linear_addr += ba;
                     for (unsigned int word_index = 0;
                          word_index < (9 * samples_per_block); word_index++) {
-                        hwaddr addr = get_data_ptr(d->regs[NV_PAPU_VPSGEADDR],
+                        hwaddr addr = get_data_ptr(d, d->regs[NV_PAPU_VPSGEADDR],
                                                    0xFFFFFFFF, linear_addr);
-                        adpcm_block[word_index] =
-                            ldl_le_phys(&address_space_memory, addr);
+                        adpcm_block[word_index] = ldl_le_p(&d->ram_ptr[addr]);
                         linear_addr += 4;
                     }
                 }
@@ -1041,43 +1040,43 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                     adpcm_decoded[block_position * channels + 1]);
             }
         } else {
-            // FIXME: Handle reading accross pages?!
-
             hwaddr addr;
             if (stream) {
                 addr = segment_offset + cbo * block_size;
             } else {
                 uint32_t linear_addr = ba + cbo * block_size;
-                addr = get_data_ptr(d->regs[NV_PAPU_VPSGEADDR], 0xFFFFFFFF,
+                addr = get_data_ptr(d, d->regs[NV_PAPU_VPSGEADDR], 0xFFFFFFFF,
                                     linear_addr);
             }
 
+            /*
+             * Read directly from the host-mapped RAM pointer instead of
+             * per-sample ldXX_phys calls that each acquire/release an RCU
+             * read lock via TLS lookup.
+             */
+            const uint8_t *src = &d->ram_ptr[addr];
             for (unsigned int channel = 0; channel < channels; channel++) {
-                uint32_t ival;
                 float fval;
                 switch (sample_size) {
                 case NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_U8:
-                    ival = ldub_phys(&address_space_memory, addr);
-                    fval = uint8_to_float(ival & 0xff);
+                    fval = uint8_to_float(src[0]);
                     break;
                 case NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_S16:
-                    ival = lduw_le_phys(&address_space_memory, addr);
-                    fval = int16_to_float(ival & 0xffff);
+                    fval = int16_to_float(lduw_le_p(src));
                     break;
                 case NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_S24:
-                    ival = ldl_le_phys(&address_space_memory, addr);
-                    fval = int24_to_float(ival);
+                    fval = int24_to_float(ldl_le_p(src));
                     break;
                 case NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE_S32:
-                    ival = ldl_le_phys(&address_space_memory, addr);
-                    fval = int32_to_float(ival);
+                    fval = int32_to_float(ldl_le_p(src));
                     break;
                 default:
                     assert(false);
+                    fval = 0;
                     break;
                 }
                 samples[sample_count][channel] = fval;
-                addr += container_size;
+                src += container_size;
             }
         }
 
@@ -1633,7 +1632,7 @@ static void *voice_worker_thread(void *arg)
         int64_t end_time = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
         g_dbg.vp.workers[worker_id].time_us = end_time - start_time;
 
-        qemu_cond_wait(&vwd->work_pending, &vwd->lock);
+        qemu_cond_wait(&self->cond, &vwd->lock);
     } while (!vwd->workers_should_exit);
 
     rcu_unregister_thread();
@@ -1735,9 +1734,14 @@ voice_work_dispatch(MCPXAPUState *d,
     if (vwd->queue_len) {
         memset(vwd->mixbins, 0, sizeof(vwd->mixbins));
 
-        // Signal workers and wait for completion
+        // Signal only workers that have been assigned work
         voice_work_schedule(d);
-        qemu_cond_broadcast(&vwd->work_pending);
+        uint64_t pending = vwd->workers_pending;
+        while (pending) {
+            int id = ctz64(pending);
+            qemu_cond_signal(&vwd->workers[id].cond);
+            pending &= pending - 1;
+        }
         qemu_cond_wait(&vwd->work_finished, &vwd->lock);
         assert(!vwd->workers_pending);
         voice_work_release_voice_locks(d);
@@ -1809,9 +1813,9 @@ static void voice_work_init(MCPXAPUState *d)
 
     qemu_mutex_init(&vwd->lock);
     qemu_mutex_lock(&vwd->lock);
-    qemu_cond_init(&vwd->work_pending);
     qemu_cond_init(&vwd->work_finished);
     for (int i = 0; i < vwd->num_workers; i++) {
+        qemu_cond_init(&vwd->workers[i].cond);
         vwd->workers_pending |= 1 << i;
         qemu_thread_create(&vwd->workers[i].thread, "mcpx.voice_worker",
                            voice_worker_thread, d, QEMU_THREAD_JOINABLE);
@@ -1827,7 +1831,9 @@ static void voice_work_finalize(MCPXAPUState *d)
 
     qemu_mutex_lock(&vwd->lock);
     vwd->workers_should_exit = true;
-    qemu_cond_broadcast(&vwd->work_pending);
+    for (int i = 0; i < vwd->num_workers; i++) {
+        qemu_cond_signal(&vwd->workers[i].cond);
+    }
     qemu_mutex_unlock(&vwd->lock);
     for (int i = 0; i < vwd->num_workers; i++) {
         qemu_thread_join(&vwd->workers[i].thread);

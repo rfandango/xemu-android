@@ -19,10 +19,12 @@
 
 #include "ui/xemu-settings.h"
 #include "renderer.h"
+#include "qemu/fast-hash.h"
 
 #include <assert.h>
 #include <glslang/Include/glslang_c_interface.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 static const glslang_resource_t
     resource_limits = { .max_lights = 32,
@@ -364,14 +366,63 @@ static glslang_stage_t vk_shader_stage_to_glslang_stage(VkShaderStageFlagBits st
     }
 }
 
+static char *spv_cache_dir;
+
+static void ensure_spv_cache_dir(void)
+{
+    if (spv_cache_dir) {
+        return;
+    }
+    spv_cache_dir =
+        g_strdup_printf("%sspv_cache", xemu_settings_get_base_path());
+    g_mkdir_with_parents(spv_cache_dir, 0755);
+}
+
+static GByteArray *spv_cache_load(uint64_t hash)
+{
+    ensure_spv_cache_dir();
+    char *path = g_strdup_printf("%s/%016" PRIx64 ".spv", spv_cache_dir, hash);
+    gchar *data = NULL;
+    gsize len = 0;
+    gboolean ok = g_file_get_contents(path, &data, &len, NULL);
+    g_free(path);
+    if (!ok || len < 4) {
+        g_free(data);
+        return NULL;
+    }
+    return g_byte_array_new_take((guint8 *)data, len);
+}
+
+static void spv_cache_store(uint64_t hash, GByteArray *spv)
+{
+    ensure_spv_cache_dir();
+    char *path = g_strdup_printf("%s/%016" PRIx64 ".spv", spv_cache_dir, hash);
+    g_file_set_contents(path, (const gchar *)spv->data, spv->len, NULL);
+    g_free(path);
+}
+
 ShaderModuleInfo *pgraph_vk_create_shader_module_from_glsl(
     PGRAPHVkState *r, VkShaderStageFlagBits stage, const char *glsl)
 {
     ShaderModuleInfo *info = g_malloc0(sizeof(*info));
     info->refcnt = 0;
     info->glsl = strdup(glsl);
-    info->spirv = pgraph_vk_compile_glsl_to_spv(
-        vk_shader_stage_to_glslang_stage(stage), glsl);
+
+    if (g_config.perf.cache_shaders) {
+        uint64_t hash = fast_hash((const uint8_t *)glsl, strlen(glsl));
+        GByteArray *cached = spv_cache_load(hash);
+        if (cached) {
+            info->spirv = cached;
+        } else {
+            info->spirv = pgraph_vk_compile_glsl_to_spv(
+                vk_shader_stage_to_glslang_stage(stage), glsl);
+            spv_cache_store(hash, info->spirv);
+        }
+    } else {
+        info->spirv = pgraph_vk_compile_glsl_to_spv(
+            vk_shader_stage_to_glslang_stage(stage), glsl);
+    }
+
     info->module = pgraph_vk_create_shader_module_from_spv(r, info->spirv);
     init_layout_from_spv(info);
     return info;

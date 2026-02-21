@@ -608,10 +608,8 @@ void dsp56k_execute_instruction(dsp_core_t* dsp)
     dsp->cur_inst_len = 1;
     dsp->instr_cycle = 2;
 
-    bool tracing = TRACE_DSP_DISASM || trace_event_get_state(TRACE_DSP56K_EXECUTE_INSTRUCTION_DISASM);
-
-    /* Disasm current instruction ? (trace mode only) */
-    if (tracing) {
+    if (unlikely(TRACE_DSP_DISASM ||
+                 trace_event_get_state(TRACE_DSP56K_EXECUTE_INSTRUCTION_DISASM))) {
         disasm_return = disasm_instruction(dsp, DSP_TRACE_MODE);
         if (disasm_return) {
             const char *text = disasm_get_instruction_text(dsp);
@@ -627,11 +625,11 @@ void dsp56k_execute_instruction(dsp_core_t* dsp)
 
     if (dsp->cur_inst < 0x100000) {
         const OpcodeEntry *op = dsp->pram_opcache[dsp->pc];
-        if (op == NULL) {
+        if (unlikely(op == NULL)) {
             op = lookup_opcode(dsp->cur_inst);
             dsp->pram_opcache[dsp->pc] = op;
         }
-        if (op->emu_func) {
+        if (likely(op->emu_func != NULL)) {
             op->emu_func(dsp);
         } else {
             DPRINTF("%x - %s\n", dsp->cur_inst, op->name);
@@ -642,16 +640,13 @@ void dsp56k_execute_instruction(dsp_core_t* dsp)
         opcodes_parmove[(dsp->cur_inst>>20) & BITMASK(4)](dsp);
     }
 
-    /* Disasm current instruction ? (trace mode only) */
-    if (tracing && disasm_return) {
+    if (unlikely(disasm_return)) {
         if (TRACE_DSP_DISASM_REG) {
             disasm_reg_compare(dsp);
         }
         if (TRACE_DSP_DISASM_MEM) {
-            /* 1 memory change to display ? */
             if (dsp->disasm_memory_ptr == 1)
                 DPRINTF("\t%s\n", dsp->str_disasm_memory[0]);
-            /* 2 memory changes to display ? */
             else if (dsp->disasm_memory_ptr == 2) {
                 DPRINTF("\t%s\n", dsp->str_disasm_memory[0]);
                 DPRINTF("\t%s\n", dsp->str_disasm_memory[1]);
@@ -659,12 +654,26 @@ void dsp56k_execute_instruction(dsp_core_t* dsp)
         }
     }
 
-    /* Process the PC */
-    dsp_postexecute_update_pc(dsp);
+    /*
+     * Fast-path PC update: when not in a REP or DO loop, this is just
+     * pc += cur_inst_len.
+     */
+    if (likely(!dsp->loop_rep &&
+               !(dsp->registers[DSP_REG_SR] & (1 << DSP_SR_LF)))) {
+        dsp->pc += dsp->cur_inst_len;
+    } else {
+        dsp_postexecute_update_pc(dsp);
+    }
 
-    /* Process Interrupts */
-    dsp_postexecute_interrupts(dsp);
-
+    /*
+     * Fast-path interrupt check: skip the full interrupt scan when no
+     * interrupts are pending and the interrupt pipeline is idle.
+     */
+    if (unlikely(dsp->interrupt_counter > 0 ||
+                 dsp->interrupt_state != DSP_INTERRUPT_NONE ||
+                 (dsp->registers[DSP_REG_SR] & (1 << DSP_SR_T)))) {
+        dsp_postexecute_interrupts(dsp);
+    }
 
     dsp->num_inst += dsp->instr_cycle;
 

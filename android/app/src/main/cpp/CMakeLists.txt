@@ -842,6 +842,8 @@ target_compile_definitions(xemu_core PRIVATE
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:VMA_STATIC_VULKAN_FUNCTIONS=0>
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:VMA_DYNAMIC_VULKAN_FUNCTIONS=0>
   CONFIG_ATOMIC64
+  CONFIG_PPOLL
+  CONFIG_PRCTL_PR_SET_TIMERSLACK
   COMPILING_PER_TARGET
   CONFIG_TARGET=\"config-target.h\"
   QEMU_VERSION=\"${QEMU_VERSION_STR}\"
@@ -851,7 +853,7 @@ target_compile_definitions(xemu_core PRIVATE
   CONFIG_TLS_PRIORITY=\"NORMAL\"
 )
 
-target_compile_options(xemu_core PRIVATE -g0
+target_compile_options(xemu_core PRIVATE -g1
   $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-UNDEBUG>
 )
 
@@ -920,7 +922,7 @@ if(XEMU_ENABLE_VULKAN)
   target_compile_definitions(xemu PRIVATE CONFIG_VULKAN VK_NO_PROTOTYPES)
 endif()
 
-target_compile_options(xemu PRIVATE -fexceptions -frtti -g0
+target_compile_options(xemu PRIVATE -fexceptions -frtti -g1
   $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-UNDEBUG>
 )
 
@@ -952,7 +954,7 @@ if(XEMU_XISO_CONVERTER_BUILD_ENABLED)
   )
 
   target_compile_definitions(xiso_converter PRIVATE ANDROID __ANDROID__)
-  target_compile_options(xiso_converter PRIVATE -fexceptions -frtti -g0
+  target_compile_options(xiso_converter PRIVATE -fexceptions -frtti -g1
     $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-UNDEBUG>
   )
 

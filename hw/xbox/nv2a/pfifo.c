@@ -470,7 +470,7 @@ void *pfifo_thread(void *arg)
         pgraph_process_pending_reports(d);
 
         if (!d->pfifo.fifo_kick) {
-            qemu_cond_broadcast(&d->pfifo.fifo_idle_cond);
+            qemu_cond_signal(&d->pfifo.fifo_idle_cond);
 
             // Both the pusher and puller are waiting for some action
             qemu_cond_wait(&d->pfifo.fifo_cond, &d->pfifo.lock);

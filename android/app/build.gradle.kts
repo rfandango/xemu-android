@@ -42,8 +42,8 @@ android {
         arguments += listOf(
           "-DXEMU_ANDROID_BUILD_ID=3",
           "-DXEMU_ENABLE_XISO_CONVERTER=ON",
-          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g0",
-          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0"
+          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g1",
+          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g1"
         )
         cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
       }
@@ -93,6 +93,7 @@ android {
       "META-INF/NOTICE*"
     )
     jniLibs.useLegacyPackaging = true
+    jniLibs.keepDebugSymbols += setOf("**/*.so")
   }
 
   compileOptions {

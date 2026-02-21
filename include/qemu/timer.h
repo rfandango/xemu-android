@@ -1004,6 +1004,14 @@ static inline int64_t cpu_get_host_ticks(void)
     return val;
 }
 
+#elif defined(__aarch64__)
+static inline int64_t cpu_get_host_ticks(void)
+{
+    uint64_t val;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(val));
+    return val;
+}
+
 #else
 /* The host CPU doesn't have an easily accessible cycle counter.
    Just return a monotonically increasing value.  This will be
