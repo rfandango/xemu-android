@@ -161,6 +161,7 @@ typedef struct NV2ABlockInfo {
 extern const NV2ABlockInfo blocktable[NV_NUM_BLOCKS];
 
 void nv2a_update_irq(NV2AState *d);
+void nv2a_vblank_recalc(NV2AState *d);
 
 static inline
 void nv2a_reg_log_read(int block, hwaddr addr, unsigned int size, uint64_t val)

@@ -112,6 +112,7 @@ void pramdac_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
         break;
     case NV_PRAMDAC_FP_VDISPLAY_END:
         d->pramdac.fp_vdisplay_end = val;
+        nv2a_vblank_recalc(d);
         break;
     case NV_PRAMDAC_FP_VCRTC:
         d->pramdac.fp_vcrtc = val;

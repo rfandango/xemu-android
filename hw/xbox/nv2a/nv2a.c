@@ -193,16 +193,44 @@ int nv2a_get_screen_off(void)
     return g_nv2a->vga.sr[VGA_SEQ_CLOCK_MODE] & VGA_SR01_SCREEN_OFF;
 }
 
+static int64_t nv2a_calc_vblank_period_ns(NV2AState *d)
+{
+    uint32_t vdisplay = d->pramdac.fp_vdisplay_end;
+
+    if (vdisplay > 480) {
+        /* PAL (576i/576p): ~50 Hz */
+        return NANOSECONDS_PER_SECOND / 50;
+    }
+
+    /* NTSC / HDTV (480i/480p/720p/1080i): ~59.94 Hz */
+    return 16683750;
+}
+
+static void nv2a_vblank_timer_cb(void *opaque)
+{
+    NV2AState *d = opaque;
+    d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
+    d->pcrtc.raster = 0;
+    nv2a_update_irq(d);
+
+    int64_t period = nv2a_calc_vblank_period_ns(d);
+    timer_mod(d->vblank_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + period);
+}
+
+void nv2a_vblank_recalc(NV2AState *d)
+{
+    if (d->vblank_timer) {
+        int64_t period = nv2a_calc_vblank_period_ns(d);
+        timer_mod(d->vblank_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + period);
+    }
+}
+
 static void nv2a_vga_gfx_update(void *opaque)
 {
     VGACommonState *vga = opaque;
     vga->hw_ops->gfx_update(vga);
-
-    NV2AState *d = container_of(vga, NV2AState, vga);
-    d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
-    d->pcrtc.raster = 0;
-
-    nv2a_update_irq(d);
 }
 
 static void nv2a_init_memory(NV2AState *d, MemoryRegion *ram)
@@ -260,6 +288,12 @@ static void nv2a_init_vga(NV2AState *d)
                              d->vram, 0, memory_region_size(d->vram));
     vga->vram_ptr = memory_region_get_ram_ptr(&vga->vram);
     vga_dirty_log_start(vga);
+
+    d->vblank_timer = timer_new_ns(QEMU_CLOCK_REALTIME,
+                                   nv2a_vblank_timer_cb, d);
+    timer_mod(d->vblank_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_REALTIME) +
+              NANOSECONDS_PER_SECOND / 60);
 }
 
 static void nv2a_lock_fifo(NV2AState *d)

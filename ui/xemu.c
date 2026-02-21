@@ -1564,6 +1564,26 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         return;
     }
 #endif
+
+    /* Frame limiter: skip the expensive render/swap path when called faster
+     * than ~60 Hz.  We still poll SDL events so input stays responsive. */
+    {
+        static int64_t last_render_ns;
+        const int64_t min_frame_ns = 16000000; /* ~62.5 Hz ceiling */
+        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+
+        if (last_render_ns && (now - last_render_ns) < min_frame_ns) {
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            sdl2_poll_events(scon);
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+            SDL_Delay(1);
+            return;
+        }
+        last_render_ns = now;
+    }
+
     if (SDL_GL_MakeCurrent(scon->real_window, scon->winctx) != 0 ||
         SDL_GL_GetCurrentContext() == NULL) {
 #ifdef __ANDROID__
@@ -1713,16 +1733,13 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
                             (int)runstate_get());
     }
 #endif
-    bool did_hw_update = false;
     if (tex == 0) {
 #ifdef __ANDROID__
-        // Ensure the software VGA path updates the surface before uploading.
         qemu_mutex_lock_main_loop();
         bql_lock();
         graphic_hw_update(scon->dcl.con);
         bql_unlock();
         qemu_mutex_unlock_main_loop();
-        did_hw_update = true;
 #endif
         // FIXME: Don't upload if notdirty
         xb_surface_gl_create_texture(scon->surface);
@@ -1778,61 +1795,15 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     android_log_gl_error("refresh-swap");
 #endif
 
-    /* VGA update (see note above) + vblank */
-    if (!did_hw_update) {
-        qemu_mutex_lock_main_loop();
-        bql_lock();
-        graphic_hw_update(scon->dcl.con);
-        if (scon->updates && scon->surface) {
-            scon->updates = 0;
-        }
-        bql_unlock();
-        qemu_mutex_unlock_main_loop();
-    } else if (scon->updates && scon->surface) {
+    /* VGA update for dirty-region tracking */
+    qemu_mutex_lock_main_loop();
+    bql_lock();
+    graphic_hw_update(scon->dcl.con);
+    if (scon->updates && scon->surface) {
         scon->updates = 0;
     }
-
-    /*
-     * Throttle to make sure swaps happen at 60Hz
-     */
-    static int64_t last_update = 0;
-    int64_t deadline = last_update + 16666666;
-
-#ifdef DEBUG_XEMU_C
-    int64_t sleep_acc = 0;
-    int64_t spin_acc = 0;
-#endif
-
-#ifndef _WIN32
-    const int64_t sleep_threshold = 2000000;
-#else
-    const int64_t sleep_threshold = 250000;
-#endif
-
-    while (1) {
-        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        int64_t time_remaining = deadline - now;
-        if (now < deadline) {
-            if (time_remaining > sleep_threshold) {
-                // Try to sleep until the until reaching the sleep threshold.
-                sleep_ns(time_remaining - sleep_threshold);
-#ifdef DEBUG_XEMU_C
-                sleep_acc += qemu_clock_get_ns(QEMU_CLOCK_REALTIME)-now;
-#endif
-            } else {
-                // Simply spin to avoid extra delays incurred with swapping to
-                // another process and back in the event of being within
-                // threshold to desired event.
-#ifdef DEBUG_XEMU_C
-                spin_acc++;
-#endif
-            }
-        } else {
-            DPRINTF("zzZz %g %ld\n", (double)sleep_acc/1000000.0, spin_acc);
-            last_update = now;
-            break;
-        }
-    }
+    bql_unlock();
+    qemu_mutex_unlock_main_loop();
 
 }
 
