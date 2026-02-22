@@ -295,6 +295,28 @@ static bool GetPrefBool(JNIEnv* env, jobject activity, const char* key, bool def
   return result;
 }
 
+static int GetPrefInt(JNIEnv* env, jobject activity, const char* key, int defaultValue) {
+  jclass activityClass = env->GetObjectClass(activity);
+  jmethodID getPrefs = env->GetMethodID(activityClass, "getSharedPreferences",
+                                        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;");
+  if (!getPrefs) return defaultValue;
+  jstring prefsName = env->NewStringUTF(kPrefsName);
+  jobject prefs = env->CallObjectMethod(activity, getPrefs, prefsName, 0);
+  env->DeleteLocalRef(prefsName);
+  if (HasException(env, "getSharedPreferences") || !prefs) return defaultValue;
+
+  jclass prefsClass = env->GetObjectClass(prefs);
+  jmethodID getInt = env->GetMethodID(prefsClass, "getInt", "(Ljava/lang/String;I)I");
+  if (!getInt) return defaultValue;
+
+  jstring jkey = env->NewStringUTF(key);
+  jint result = env->CallIntMethod(prefs, getInt, jkey, (jint)defaultValue);
+  env->DeleteLocalRef(jkey);
+  if (HasException(env, "SharedPreferences.getInt")) return defaultValue;
+
+  return result;
+}
+
 static bool CopyUriToPath(JNIEnv* env, jobject activity, const std::string& uriString, const std::string& path) {
   if (uriString.empty() || path.empty()) return false;
 
@@ -369,6 +391,13 @@ struct VkRendererFlags {
   bool precise_barriers = true;
 };
 
+struct DisplaySettings {
+  int surface_scale = 1;
+  bool vsync = false;
+  std::string filtering = "nearest";
+  std::string aspect_ratio = "auto";
+};
+
 static bool WriteConfigToml(const std::string& config_path,
                             const std::string& mcpx,
                             const std::string& flash,
@@ -378,7 +407,8 @@ static bool WriteConfigToml(const std::string& config_path,
                             bool cache_code = true,
                             bool native_float_ops = true,
                             bool tcg_optimizer = true,
-                            VkRendererFlags vk_flags = {}) {
+                            VkRendererFlags vk_flags = {},
+                            DisplaySettings disp = {}) {
   if (config_path.empty()) return false;
   toml::table tbl;
 
@@ -403,26 +433,26 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* general = EnsureTable(tbl, "general");
   toml::table* display = EnsureTable(tbl, "display");
   toml::table* display_window = EnsureTable(*display, "window");
+  toml::table* display_quality = EnsureTable(*display, "quality");
+  toml::table* display_ui = EnsureTable(*display, "ui");
   toml::table* audio = EnsureTable(tbl, "audio");
   toml::table* audio_vp = EnsureTable(*audio, "vp");
   toml::table* android = EnsureTable(tbl, "android");
   toml::table* perf = EnsureTable(tbl, "perf");
   toml::table* sys = EnsureTable(tbl, "sys");
   toml::table* files = EnsureTable(*sys, "files");
-  if (!general || !display || !display_window || !audio || !audio_vp ||
-      !android || !perf || !sys || !files) {
+  if (!general || !display || !display_window || !display_quality || !display_ui ||
+      !audio || !audio_vp || !android || !perf || !sys || !files) {
     LogErrorFmt("Failed to build config tables at %s", config_path.c_str());
     return false;
   }
 
   general->insert_or_assign("show_welcome", false);
   display->insert_or_assign("renderer", "vulkan");
-  if (!display->contains("filtering")) {
-    display->insert_or_assign("filtering", "nearest");
-  }
-  if (!display_window->contains("vsync")) {
-    display_window->insert_or_assign("vsync", false);
-  }
+  display->insert_or_assign("filtering", disp.filtering);
+  display_window->insert_or_assign("vsync", disp.vsync);
+  display_quality->insert_or_assign("surface_scale", disp.surface_scale);
+  display_ui->insert_or_assign("aspect_ratio", disp.aspect_ratio);
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
@@ -577,8 +607,17 @@ static SetupFiles SyncSetupFiles() {
   vkFlags.compute_swizzle = GetPrefBool(env, activity, "vk_compute_swizzle", true);
   vkFlags.tex_nondraw_cmd = GetPrefBool(env, activity, "vk_tex_nondraw_cmd", false);
   vkFlags.precise_barriers = GetPrefBool(env, activity, "vk_precise_barriers", true);
+
+  DisplaySettings dispSettings;
+  dispSettings.surface_scale = GetPrefInt(env, activity, "surface_scale", 1);
+  dispSettings.vsync = GetPrefBool(env, activity, "vsync", false);
+  std::string filterStr = GetPrefString(env, activity, "filtering");
+  if (!filterStr.empty()) dispSettings.filtering = filterStr;
+  std::string arStr = GetPrefString(env, activity, "aspect_ratio");
+  if (!arStr.empty()) dispSettings.aspect_ratio = arStr;
+
   WriteConfigToml(out.config_path, out.mcpx, out.flash, out.hdd, out.dvd, out.eeprom,
-                  cacheCode, nativeFloatOps, tcgOptimizer, vkFlags);
+                  cacheCode, nativeFloatOps, tcgOptimizer, vkFlags, dispSettings);
   LogInfoFmt("SyncSetupFiles: config %s", out.config_path.c_str());
   LogInfoFmt("Resolved mcpx=%s", out.mcpx.c_str());
   LogInfoFmt("Resolved flash=%s", out.flash.c_str());

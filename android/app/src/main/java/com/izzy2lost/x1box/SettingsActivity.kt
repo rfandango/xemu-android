@@ -104,6 +104,11 @@ class SettingsActivity : AppCompatActivity() {
     wireSwitch(R.id.switch_vk_tex_nondraw_cmd, "vk_tex_nondraw_cmd", false)
     wireSwitch(R.id.switch_vk_precise_barriers, "vk_precise_barriers", true)
 
+    setupResolutionScale()
+    wireSwitch(R.id.switch_vsync, "vsync", false)
+    setupFilteringPicker()
+    setupAspectRatioPicker()
+
     findViewById<MaterialButton>(R.id.btn_clear_cache).setOnClickListener {
       confirmClearCache()
     }
@@ -192,6 +197,69 @@ class SettingsActivity : AppCompatActivity() {
     switch.isChecked = prefs.getBoolean(prefKey, defaultValue)
     switch.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean(prefKey, checked).apply()
+    }
+  }
+
+  private fun setupResolutionScale() {
+    val btn = findViewById<MaterialButton>(R.id.btn_resolution_scale)
+    val labels = arrayOf("1x (Native)", "2x", "3x", "4x")
+    val values = intArrayOf(1, 2, 3, 4)
+    val current = prefs.getInt("surface_scale", 1)
+    val idx = values.indexOf(current).coerceAtLeast(0)
+    btn.text = labels[idx]
+    btn.setOnClickListener {
+      val sel = values.indexOf(prefs.getInt("surface_scale", 1)).coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.settings_resolution_scale)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          prefs.edit().putInt("surface_scale", values[which]).apply()
+          btn.text = labels[which]
+          dialog.dismiss()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
+    }
+  }
+
+  private fun setupFilteringPicker() {
+    val btn = findViewById<MaterialButton>(R.id.btn_filtering)
+    val labels = arrayOf("Linear", "Nearest")
+    val values = arrayOf("linear", "nearest")
+    val current = prefs.getString("filtering", "nearest") ?: "nearest"
+    val idx = values.indexOf(current).coerceAtLeast(0)
+    btn.text = labels[idx]
+    btn.setOnClickListener {
+      val sel = values.indexOf(prefs.getString("filtering", "nearest") ?: "nearest").coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.settings_filtering)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          prefs.edit().putString("filtering", values[which]).apply()
+          btn.text = labels[which]
+          dialog.dismiss()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
+    }
+  }
+
+  private fun setupAspectRatioPicker() {
+    val btn = findViewById<MaterialButton>(R.id.btn_aspect_ratio)
+    val labels = arrayOf("Auto", "4:3", "16:9", "Native")
+    val values = arrayOf("auto", "4x3", "16x9", "native")
+    val current = prefs.getString("aspect_ratio", "auto") ?: "auto"
+    val idx = values.indexOf(current).coerceAtLeast(0)
+    btn.text = labels[idx]
+    btn.setOnClickListener {
+      val sel = values.indexOf(prefs.getString("aspect_ratio", "auto") ?: "auto").coerceAtLeast(0)
+      MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.settings_aspect_ratio)
+        .setSingleChoiceItems(labels, sel) { dialog, which ->
+          prefs.edit().putString("aspect_ratio", values[which]).apply()
+          btn.text = labels[which]
+          dialog.dismiss()
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
     }
   }
 

@@ -152,6 +152,27 @@ static bool parse_filtering(const std::string &value, CONFIG_DISPLAY_FILTERING *
     return false;
 }
 
+static bool parse_aspect_ratio(const std::string &value, CONFIG_DISPLAY_UI_ASPECT_RATIO *out)
+{
+    if (value == "native" || value == "Native" || value == "NATIVE") {
+        *out = CONFIG_DISPLAY_UI_ASPECT_RATIO_NATIVE;
+        return true;
+    }
+    if (value == "auto" || value == "Auto" || value == "AUTO") {
+        *out = CONFIG_DISPLAY_UI_ASPECT_RATIO_AUTO;
+        return true;
+    }
+    if (value == "4x3" || value == "4X3" || value == "4:3") {
+        *out = CONFIG_DISPLAY_UI_ASPECT_RATIO_4X3;
+        return true;
+    }
+    if (value == "16x9" || value == "16X9" || value == "16:9") {
+        *out = CONFIG_DISPLAY_UI_ASPECT_RATIO_16X9;
+        return true;
+    }
+    return false;
+}
+
 const char *xemu_settings_get_error_message(void)
 {
     return error_msg.empty() ? NULL : error_msg.c_str();
@@ -231,6 +252,8 @@ bool xemu_settings_load(void)
         auto general = tbl["general"];
         auto display = tbl["display"];
         auto display_window = display["window"];
+        auto display_quality = display["quality"];
+        auto display_ui = display["ui"];
         auto audio = tbl["audio"];
         auto audio_vp = audio["vp"];
         auto perf = tbl["perf"];
@@ -263,6 +286,20 @@ bool xemu_settings_load(void)
 
         if (auto vsync = display_window["vsync"].value<bool>()) {
             g_config.display.window.vsync = *vsync;
+        }
+
+        if (auto scale = display_quality["surface_scale"].value<int64_t>()) {
+            int s = static_cast<int>(*scale);
+            if (s >= 1 && s <= 4) {
+                g_config.display.quality.surface_scale = s;
+            }
+        }
+
+        if (auto ar = display_ui["aspect_ratio"].value<std::string>()) {
+            CONFIG_DISPLAY_UI_ASPECT_RATIO parsed;
+            if (parse_aspect_ratio(*ar, &parsed)) {
+                g_config.display.ui.aspect_ratio = parsed;
+            }
         }
 
         // Performance settings

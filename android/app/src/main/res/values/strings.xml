@@ -130,4 +130,16 @@
 
   <string name="settings_display_title">Display</string>
   <string name="settings_show_fps">Show FPS counter</string>
+
+  <string name="settings_resolution_scale">Resolution scale</string>
+  <string name="settings_resolution_scale_desc">Internal rendering resolution multiplier (requires restart)</string>
+
+  <string name="settings_vsync">VSync</string>
+  <string name="settings_vsync_desc">Synchronize frame presentation with display refresh rate</string>
+
+  <string name="settings_filtering">Texture filtering</string>
+  <string name="settings_filtering_desc">Filtering applied when scaling the output image</string>
+
+  <string name="settings_aspect_ratio">Aspect ratio</string>
+  <string name="settings_aspect_ratio_desc">Force a specific display aspect ratio</string>
 </resources>
