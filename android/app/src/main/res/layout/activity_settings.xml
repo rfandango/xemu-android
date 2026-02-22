@@ -209,6 +209,38 @@
             android:text="@string/settings_cache_code_desc"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_native_float_ops"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_native_float_ops"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="@string/settings_native_float_ops_desc"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_tcg_optimizer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_tcg_optimizer"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="@string/settings_tcg_optimizer_desc"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
         </LinearLayout>
       </com.google.android.material.card.MaterialCardView>
 

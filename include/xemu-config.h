@@ -289,6 +289,8 @@ struct config {
         bool hard_fpu;
         bool cache_shaders;
         bool cache_code;
+        bool native_float_ops;
+        bool tcg_optimizer;
     } perf;
 };
 

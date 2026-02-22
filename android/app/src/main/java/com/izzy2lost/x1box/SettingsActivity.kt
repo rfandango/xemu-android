@@ -21,6 +21,8 @@ class SettingsActivity : AppCompatActivity() {
   private lateinit var btnResetDriver: MaterialButton
   private lateinit var switchShowFps: MaterialSwitch
   private lateinit var switchCacheCode: MaterialSwitch
+  private lateinit var switchNativeFloatOps: MaterialSwitch
+  private lateinit var switchTcgOptimizer: MaterialSwitch
 
   private val pickDriverZip =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -40,6 +42,8 @@ class SettingsActivity : AppCompatActivity() {
     btnResetDriver = findViewById(R.id.btn_reset_driver)
     switchShowFps = findViewById(R.id.switch_show_fps)
     switchCacheCode = findViewById(R.id.switch_cache_code)
+    switchNativeFloatOps = findViewById(R.id.switch_native_float_ops)
+    switchTcgOptimizer = findViewById(R.id.switch_tcg_optimizer)
 
     findViewById<View>(R.id.btn_settings_back).setOnClickListener { finish() }
 
@@ -74,6 +78,16 @@ class SettingsActivity : AppCompatActivity() {
     switchCacheCode.isChecked = prefs.getBoolean("cache_code", true)
     switchCacheCode.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean("cache_code", checked).apply()
+    }
+
+    switchNativeFloatOps.isChecked = prefs.getBoolean("native_float_ops", true)
+    switchNativeFloatOps.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("native_float_ops", checked).apply()
+    }
+
+    switchTcgOptimizer.isChecked = prefs.getBoolean("tcg_optimizer", true)
+    switchTcgOptimizer.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("tcg_optimizer", checked).apply()
     }
 
     refreshDriverStatus()

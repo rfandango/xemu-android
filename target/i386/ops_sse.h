@@ -635,10 +635,19 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
 #endif
 
 #if defined(XBOX) && defined(__aarch64__)
-#define FPU_ADD(size, a, b) float ## size ## _add_native(a, b)
-#define FPU_SUB(size, a, b) float ## size ## _sub_native(a, b)
-#define FPU_MUL(size, a, b) float ## size ## _mul_native(a, b)
-#define FPU_DIV(size, a, b) float ## size ## _div_native(a, b)
+extern int g_use_native_float_ops;
+#define FPU_ADD(size, a, b) (g_use_native_float_ops ? \
+    float ## size ## _add_native(a, b) : \
+    float ## size ## _add(a, b, &env->sse_status))
+#define FPU_SUB(size, a, b) (g_use_native_float_ops ? \
+    float ## size ## _sub_native(a, b) : \
+    float ## size ## _sub(a, b, &env->sse_status))
+#define FPU_MUL(size, a, b) (g_use_native_float_ops ? \
+    float ## size ## _mul_native(a, b) : \
+    float ## size ## _mul(a, b, &env->sse_status))
+#define FPU_DIV(size, a, b) (g_use_native_float_ops ? \
+    float ## size ## _div_native(a, b) : \
+    float ## size ## _div(a, b, &env->sse_status))
 #else
 #define FPU_ADD(size, a, b) float ## size ## _add(a, b, &env->sse_status)
 #define FPU_SUB(size, a, b) float ## size ## _sub(a, b, &env->sse_status)
@@ -858,7 +867,9 @@ void glue(helper_sqrtps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
     int i;
     for (i = 0; i < 2 << SHIFT; i++) {
 #if defined(XBOX) && defined(__aarch64__)
-        d->ZMM_S(i) = float32_sqrt_native(s->ZMM_S(i));
+        d->ZMM_S(i) = g_use_native_float_ops
+            ? float32_sqrt_native(s->ZMM_S(i))
+            : float32_sqrt(s->ZMM_S(i), &env->sse_status);
 #else
         d->ZMM_S(i) = float32_sqrt(s->ZMM_S(i), &env->sse_status);
 #endif
@@ -870,7 +881,9 @@ void glue(helper_sqrtpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
     int i;
     for (i = 0; i < 1 << SHIFT; i++) {
 #if defined(XBOX) && defined(__aarch64__)
-        d->ZMM_D(i) = float64_sqrt_native(s->ZMM_D(i));
+        d->ZMM_D(i) = g_use_native_float_ops
+            ? float64_sqrt_native(s->ZMM_D(i))
+            : float64_sqrt(s->ZMM_D(i), &env->sse_status);
 #else
         d->ZMM_D(i) = float64_sqrt(s->ZMM_D(i), &env->sse_status);
 #endif
@@ -883,7 +896,9 @@ void helper_sqrtss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     int i;
 #if defined(XBOX) && defined(__aarch64__)
-    d->ZMM_S(0) = float32_sqrt_native(s->ZMM_S(0));
+    d->ZMM_S(0) = g_use_native_float_ops
+        ? float32_sqrt_native(s->ZMM_S(0))
+        : float32_sqrt(s->ZMM_S(0), &env->sse_status);
 #else
     d->ZMM_S(0) = float32_sqrt(s->ZMM_S(0), &env->sse_status);
 #endif
@@ -896,7 +911,9 @@ void helper_sqrtsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     int i;
 #if defined(XBOX) && defined(__aarch64__)
-    d->ZMM_D(0) = float64_sqrt_native(s->ZMM_D(0));
+    d->ZMM_D(0) = g_use_native_float_ops
+        ? float64_sqrt_native(s->ZMM_D(0))
+        : float64_sqrt(s->ZMM_D(0), &env->sse_status);
 #else
     d->ZMM_D(0) = float64_sqrt(s->ZMM_D(0), &env->sse_status);
 #endif

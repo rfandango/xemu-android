@@ -365,7 +365,9 @@ static bool WriteConfigToml(const std::string& config_path,
                             const std::string& hdd,
                             const std::string& dvd,
                             const std::string& eeprom,
-                            bool cache_code = true) {
+                            bool cache_code = true,
+                            bool native_float_ops = true,
+                            bool tcg_optimizer = true) {
   if (config_path.empty()) return false;
   toml::table tbl;
 
@@ -433,6 +435,8 @@ static bool WriteConfigToml(const std::string& config_path,
   }
 
   perf->insert_or_assign("cache_code", cache_code);
+  perf->insert_or_assign("native_float_ops", native_float_ops);
+  perf->insert_or_assign("tcg_optimizer", tcg_optimizer);
 
   files->insert_or_assign("bootrom_path", mcpx);
   files->insert_or_assign("flashrom_path", flash);
@@ -545,7 +549,10 @@ static SetupFiles SyncSetupFiles() {
 
   out.config_path = base + "/xemu.toml";
   bool cacheCode = GetPrefBool(env, activity, "cache_code", true);
-  WriteConfigToml(out.config_path, out.mcpx, out.flash, out.hdd, out.dvd, out.eeprom, cacheCode);
+  bool nativeFloatOps = GetPrefBool(env, activity, "native_float_ops", true);
+  bool tcgOptimizer = GetPrefBool(env, activity, "tcg_optimizer", true);
+  WriteConfigToml(out.config_path, out.mcpx, out.flash, out.hdd, out.dvd, out.eeprom,
+                  cacheCode, nativeFloatOps, tcgOptimizer);
   LogInfoFmt("SyncSetupFiles: config %s", out.config_path.c_str());
   LogInfoFmt("Resolved mcpx=%s", out.mcpx.c_str());
   LogInfoFmt("Resolved flash=%s", out.flash.c_str());

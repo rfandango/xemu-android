@@ -37,8 +37,13 @@
 
 static int g_use_hard_fpu;
 
-#if defined(XBOX) && defined(__x86_64__)
+#ifdef XBOX
 #include "ui/xemu-settings.h"
+int g_use_native_float_ops;
+int g_use_tcg_optimizer;
+#endif
+
+#if defined(XBOX) && defined(__x86_64__)
 #define MAP_GEN_HELPER_SOFT_HARD(name) \
     (g_use_hard_fpu ? gen_helper_##name##__hard : gen_helper_##name##__soft)
 #define gen_helper_flds_FT0       MAP_GEN_HELPER_SOFT_HARD(flds_FT0)
@@ -4283,6 +4288,10 @@ void tcg_x86_init(void)
 
 #if defined(XBOX) && defined(__x86_64__)
     g_use_hard_fpu = g_config.perf.hard_fpu;
+#endif
+#if defined(XBOX)
+    g_use_native_float_ops = g_config.perf.native_float_ops;
+    g_use_tcg_optimizer = g_config.perf.tcg_optimizer;
 #endif
 }
 
