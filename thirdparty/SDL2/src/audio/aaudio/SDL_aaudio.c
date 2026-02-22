@@ -121,7 +121,7 @@ static int aaudio_OpenDevice(_THIS, const char *devname)
         const aaudio_format_t format = (this->spec.format == AUDIO_S16SYS) ? AAUDIO_FORMAT_PCM_I16 : AAUDIO_FORMAT_PCM_FLOAT;
         ctx.AAudioStreamBuilder_setFormat(ctx.builder, format);
     }
-    ctx.AAudioStreamBuilder_setPerformanceMode(ctx.builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    ctx.AAudioStreamBuilder_setPerformanceMode(ctx.builder, AAUDIO_PERFORMANCE_MODE_NONE);
 
     ctx.AAudioStreamBuilder_setErrorCallback(ctx.builder, aaudio_errorCallback, private);
 
@@ -250,7 +250,7 @@ static int RebuildAAudioStream(SDL_AudioDevice *device)
         const aaudio_format_t format = (device->spec.format == AUDIO_S16SYS) ? AAUDIO_FORMAT_PCM_I16 : AAUDIO_FORMAT_PCM_FLOAT;
         ctx.AAudioStreamBuilder_setFormat(ctx.builder, format);
     }
-    ctx.AAudioStreamBuilder_setPerformanceMode(ctx.builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    ctx.AAudioStreamBuilder_setPerformanceMode(ctx.builder, AAUDIO_PERFORMANCE_MODE_NONE);
 
     ctx.AAudioStreamBuilder_setErrorCallback(ctx.builder, aaudio_errorCallback, hidden);
 
@@ -315,7 +315,7 @@ static void aaudio_PlayDevice(_THIS)
 {
     struct SDL_PrivateAudioData *private = this->hidden;
     aaudio_result_t res;
-    int64_t timeoutNanoseconds = 1 * 1000 * 1000; /* 8 ms */
+    int64_t timeoutNanoseconds = 8 * 1000 * 1000; /* 8 ms */
     res = ctx.AAudioStream_write(private->stream, private->mixbuf, private->mixlen / private->frame_size, timeoutNanoseconds);
     if (res < 0) {
         LOGI("%s : %s", __func__, ctx.AAudio_convertResultToText(res));

@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -11,6 +12,11 @@ struct SRC_STATE {
     src_callback_t cb;
     void *cb_data;
     int channels;
+
+    float *input_buf;
+    int input_buf_len;
+    int input_buf_used;
+    double input_pos;
 };
 
 SRC_STATE *src_callback_new(src_callback_t cb, int converter_type, int channels,
@@ -30,30 +36,119 @@ SRC_STATE *src_callback_new(src_callback_t cb, int converter_type, int channels,
     state->cb = cb;
     state->cb_data = cb_data;
     state->channels = channels;
+    state->input_buf = NULL;
+    state->input_buf_len = 0;
+    state->input_buf_used = 0;
+    state->input_pos = 0.0;
     return state;
+}
+
+static int src_refill_input(SRC_STATE *state)
+{
+    int ch = state->channels;
+    int consumed = (int)state->input_pos;
+    state->input_pos -= consumed;
+    if (state->input_pos < 0.0) {
+        state->input_pos = 0.0;
+    }
+
+    int remaining = state->input_buf_len - state->input_buf_used - consumed;
+    if (remaining < 0) {
+        remaining = 0;
+    }
+
+    float *new_data = NULL;
+    long got = state->cb(state->cb_data, &new_data);
+    if (got <= 0 || new_data == NULL) {
+        if (remaining > 0 && state->input_buf) {
+            memmove(state->input_buf,
+                    state->input_buf + (state->input_buf_used + consumed) * ch,
+                    sizeof(float) * remaining * ch);
+            state->input_buf_len = remaining;
+            state->input_buf_used = 0;
+        }
+        return remaining >= 2;
+    }
+
+    int new_len = remaining + (int)got;
+    float *buf = (float *)malloc(sizeof(float) * new_len * ch);
+    if (!buf) {
+        return 0;
+    }
+
+    if (remaining > 0 && state->input_buf) {
+        memcpy(buf,
+               state->input_buf + (state->input_buf_used + consumed) * ch,
+               sizeof(float) * remaining * ch);
+    }
+    memcpy(buf + remaining * ch, new_data, sizeof(float) * got * ch);
+
+    free(state->input_buf);
+    state->input_buf = buf;
+    state->input_buf_len = new_len;
+    state->input_buf_used = 0;
+
+    return 1;
 }
 
 long src_callback_read(SRC_STATE *state, double ratio, long frames, float *data)
 {
-    (void)ratio;
     if (!state || !state->cb || !data || frames <= 0) {
         return 0;
     }
 
-    float *in = NULL;
-    long got = state->cb(state->cb_data, &in);
-    if (got <= 0 || in == NULL) {
-        return 0;
+    if (ratio <= 0.0) {
+        ratio = 1.0;
     }
 
-    long to_copy = frames < got ? frames : got;
-    memcpy(data, in, sizeof(float) * to_copy * state->channels);
-    return to_copy;
+    int ch = state->channels;
+    double step = 1.0 / ratio;
+    long out_frames = 0;
+
+    while (out_frames < frames) {
+        int avail = state->input_buf_len - state->input_buf_used;
+        int needed_idx = (int)state->input_pos + 1;
+
+        if (needed_idx >= avail) {
+            if (!src_refill_input(state)) {
+                break;
+            }
+            avail = state->input_buf_len - state->input_buf_used;
+            if (avail < 2) {
+                break;
+            }
+        }
+
+        int idx0 = (int)state->input_pos;
+        int idx1 = idx0 + 1;
+        if (idx1 >= avail) {
+            break;
+        }
+
+        float frac = (float)(state->input_pos - idx0);
+        float *s0 = state->input_buf + (state->input_buf_used + idx0) * ch;
+        float *s1 = state->input_buf + (state->input_buf_used + idx1) * ch;
+
+        for (int c = 0; c < ch; c++) {
+            data[out_frames * ch + c] = s0[c] + frac * (s1[c] - s0[c]);
+        }
+
+        out_frames++;
+        state->input_pos += step;
+    }
+
+    return out_frames;
 }
 
 int src_reset(SRC_STATE *state)
 {
-    (void)state;
+    if (state) {
+        free(state->input_buf);
+        state->input_buf = NULL;
+        state->input_buf_len = 0;
+        state->input_buf_used = 0;
+        state->input_pos = 0.0;
+    }
     return 0;
 }
 

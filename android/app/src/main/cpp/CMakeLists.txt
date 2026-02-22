@@ -392,7 +392,7 @@ list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "accel[\\\\/](hvf|mshv|xen|qtest|kvm
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "accel[\\\\/]tcg[\\\\/]plugin-gen\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "accel[\\\\/]tcg[\\\\/]user-exec\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "accel[\\\\/]tcg[\\\\/]user-exec-stub\\.c$")
-list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "audio[\\\\/](alsaaudio|dbusaudio|dsoundaudio|jackaudio|ossaudio|paaudio|pwaudio|sndioaudio|spiceaudio|audio_win_int|wavaudio)\\.c$")
+list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "audio[\\\\/](alsaaudio|dbusaudio|dsoundaudio|jackaudio|ossaudio|paaudio|pwaudio|sdlaudio|sndioaudio|spiceaudio|audio_win_int|wavaudio)\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "backends[\\\\/]cryptodev-.*\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "backends[\\\\/]igvm.*\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "backends[\\\\/]tpm[\\\\/].*\\.c$")

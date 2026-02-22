@@ -270,36 +270,22 @@ static void monitor_sink_cb(void *opaque, uint8_t *stream, int free_b)
         return;
     }
 
-    int avail = 0;
-    for (int i = 0; i < 10; i++) {
-        qemu_spin_lock(&s->monitor.fifo_lock);
-        avail = fifo8_num_used(&s->monitor.fifo);
-        qemu_spin_unlock(&s->monitor.fifo_lock);
-        if (avail >= free_b) {
-            break;
-        }
-        sleep_ns(500000);
-        qemu_cond_broadcast(&s->cond);
-        if (!runstate_is_running()) {
-            memset(stream, 0, free_b);
-            return;
-        }
-    }
+    int avail;
+    qemu_spin_lock(&s->monitor.fifo_lock);
+    avail = fifo8_num_used(&s->monitor.fifo);
+    qemu_spin_unlock(&s->monitor.fifo_lock);
 
-    int copied = 0;
     int to_copy = MIN(free_b, avail);
+    int copied = 0;
     while (copied < to_copy) {
-        uint32_t chunk_len = 0;
+        uint32_t chunk_len;
         qemu_spin_lock(&s->monitor.fifo_lock);
         chunk_len = fifo8_pop_buf(&s->monitor.fifo, stream + copied,
                                   to_copy - copied);
         qemu_spin_unlock(&s->monitor.fifo_lock);
-        if (!chunk_len) {
-            break;
-        }
+        if (!chunk_len) break;
         copied += chunk_len;
     }
-
     if (copied < free_b) {
         memset(stream + copied, 0, free_b - copied);
     }
@@ -314,9 +300,9 @@ static void monitor_init(MCPXAPUState *d)
     int fifo_frames = 3;
     int audio_samples = 512;
 #ifdef __ANDROID__
-    fifo_frames = 8;
-    audio_samples = 1024;
-    fifo_frames = getenv_int_clamped("XEMU_ANDROID_AUDIO_FIFO_FRAMES", 3, 32,
+    fifo_frames = 48;
+    audio_samples = 2048;
+    fifo_frames = getenv_int_clamped("XEMU_ANDROID_AUDIO_FIFO_FRAMES", 3, 128,
                                      fifo_frames);
     audio_samples = getenv_int_clamped("XEMU_ANDROID_AUDIO_SAMPLES", 256, 4096,
                                        audio_samples);
@@ -327,7 +313,7 @@ static void monitor_init(MCPXAPUState *d)
 
     struct SDL_AudioSpec sdl_audio_spec = {
         .freq = 48000,
-        .format = AUDIO_S16LSB,
+        .format = AUDIO_S16SYS,
         .channels = 2,
         .samples = audio_samples,
         .callback = monitor_sink_cb,
@@ -342,32 +328,23 @@ static void monitor_init(MCPXAPUState *d)
     SDL_AudioDeviceID sdl_audio_dev;
     SDL_AudioSpec obtained_audio_spec;
     sdl_audio_dev = SDL_OpenAudioDevice(NULL, 0, &sdl_audio_spec,
-                                        &obtained_audio_spec, 0);
+                                        &obtained_audio_spec,
+                                        SDL_AUDIO_ALLOW_FORMAT_CHANGE);
     if (sdl_audio_dev == 0) {
         fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
         assert(!"SDL_OpenAudioDevice failed");
         exit(1);
     }
 
-    int bytes_per_sample = SDL_AUDIO_BITSIZE(obtained_audio_spec.format) / 8;
-    if (bytes_per_sample <= 0) {
-        bytes_per_sample = SDL_AUDIO_BITSIZE(sdl_audio_spec.format) / 8;
+    int fifo_frame_bytes = sizeof(d->monitor.frame_buf);
+    int drain_bytes = obtained_audio_spec.samples * 2 * sizeof(int16_t);
+    if (drain_bytes <= 0) {
+        drain_bytes = audio_samples * 2 * sizeof(int16_t);
     }
-    if (bytes_per_sample <= 0) {
-        bytes_per_sample = 2;
-    }
-    int device_buffer_bytes = obtained_audio_spec.samples *
-                              obtained_audio_spec.channels *
-                              bytes_per_sample;
-    if (device_buffer_bytes <= 0) {
-        device_buffer_bytes = audio_samples * sdl_audio_spec.channels *
-                              bytes_per_sample;
-    }
-
-    int frame_bytes = sizeof(d->monitor.frame_buf);
-    int drain_bytes = MAX(device_buffer_bytes, frame_bytes);
-    int max_high = MAX(d->monitor.fifo_capacity_bytes - frame_bytes, frame_bytes);
-    d->monitor.device_buffer_bytes = device_buffer_bytes;
+    drain_bytes = MAX(drain_bytes, fifo_frame_bytes);
+    int max_high = MAX(d->monitor.fifo_capacity_bytes - fifo_frame_bytes,
+                       fifo_frame_bytes);
+    d->monitor.device_buffer_bytes = drain_bytes;
     d->monitor.queued_bytes_high = MIN(3 * drain_bytes, max_high);
     d->monitor.queued_bytes_low = MIN(drain_bytes, d->monitor.queued_bytes_high);
 

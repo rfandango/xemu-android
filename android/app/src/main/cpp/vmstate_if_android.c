@@ -56,10 +56,6 @@ __attribute__((used)) static void *xemu_android_force_ohci_pci_ref =
 extern void xemu_android_force_mcpx_aci_link(void);
 __attribute__((used)) static void *xemu_android_force_mcpx_aci_ref =
     (void *)&xemu_android_force_mcpx_aci_link;
-/* Force-link the SDL audio driver registration unit from the static lib. */
-extern void xemu_android_force_sdlaudio_link(void);
-__attribute__((used)) static void *xemu_android_force_sdlaudio_ref =
-    (void *)&xemu_android_force_sdlaudio_link;
 /* Force-link the noaudio backend registration unit from the static lib. */
 extern void xemu_android_force_noaudio_link(void);
 __attribute__((used)) static void *xemu_android_force_noaudio_ref =
