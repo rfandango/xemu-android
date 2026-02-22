@@ -270,10 +270,17 @@ static void monitor_sink_cb(void *opaque, uint8_t *stream, int free_b)
         return;
     }
 
-    int avail;
-    qemu_spin_lock(&s->monitor.fifo_lock);
-    avail = fifo8_num_used(&s->monitor.fifo);
-    qemu_spin_unlock(&s->monitor.fifo_lock);
+    int avail = 0;
+    for (int i = 0; i < 4; i++) {
+        qemu_spin_lock(&s->monitor.fifo_lock);
+        avail = fifo8_num_used(&s->monitor.fifo);
+        qemu_spin_unlock(&s->monitor.fifo_lock);
+        if (avail >= free_b) {
+            break;
+        }
+        qemu_cond_broadcast(&s->cond);
+        sleep_ns(1000000);
+    }
 
     int to_copy = MIN(free_b, avail);
     int copied = 0;
