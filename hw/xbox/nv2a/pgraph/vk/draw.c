@@ -192,6 +192,8 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    r->num_submit_frames = g_config.perf.vk_buffered_submit ? 2 : 1;
+
     VK_LOG("init_pipelines: begin");
 
     init_pipeline_cache(pg);
@@ -205,7 +207,7 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
     };
 
-    for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
+    for (int i = 0; i < r->num_submit_frames; i++) {
         VK_CHECK(vkCreateSemaphore(r->device, &semaphore_info, NULL,
                                    &r->frame_semaphores[i]));
         VK_CHECK(vkCreateFence(r->device, &fence_info, NULL,
@@ -217,14 +219,14 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
     VK_CHECK(
         vkCreateFence(r->device, &fence_info, NULL, &r->aux_fence));
 
-    VK_LOG("init_pipelines: done (NUM_SUBMIT_FRAMES=%d)", NUM_SUBMIT_FRAMES);
+    VK_LOG("init_pipelines: done (num_submit_frames=%d)", r->num_submit_frames);
 }
 
 void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
+    for (int i = 0; i < r->num_submit_frames; i++) {
         if (r->frame_submitted[i]) {
             VK_CHECK(vkWaitForFences(r->device, 1, &r->frame_fences[i],
                                      VK_TRUE, UINT64_MAX));
@@ -236,7 +238,7 @@ void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
     finalize_pipeline_cache(pg);
     finalize_render_passes(r);
 
-    for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
+    for (int i = 0; i < r->num_submit_frames; i++) {
         vkDestroyFence(r->device, r->frame_fences[i], NULL);
         vkDestroySemaphore(r->device, r->frame_semaphores[i], NULL);
     }
@@ -641,23 +643,22 @@ static bool check_pipeline_dirty(PGRAPHState *pg)
         return true;
     }
 
-#if OPT_DYNAMIC_STATES
-    const unsigned int regs[] = {
+    const unsigned int dyn_regs[] = {
         NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0,
         NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3,
         NV_PGRAPH_SETUPRASTER, NV_PGRAPH_CONTROL_1,
     };
-#else
-    const unsigned int regs[] = {
+    const unsigned int full_regs[] = {
         NV_PGRAPH_BLEND,       NV_PGRAPH_CONTROL_0,
         NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_2,
         NV_PGRAPH_CONTROL_3,   NV_PGRAPH_SETUPRASTER,
         NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
         NV_PGRAPH_CONTROL_1,
     };
-#endif
+    const unsigned int *regs = g_config.perf.vk_dynamic_states ? dyn_regs : full_regs;
+    int num_regs = g_config.perf.vk_dynamic_states ? ARRAY_SIZE(dyn_regs) : ARRAY_SIZE(full_regs);
 
-    for (int i = 0; i < ARRAY_SIZE(regs); i++) {
+    for (int i = 0; i < num_regs; i++) {
         if (pgraph_is_reg_dirty(pg, regs[i])) {
             return true;
         }
@@ -693,30 +694,30 @@ static void init_pipeline_key(PGRAPHState *pg, PipelineKey *key)
            sizeof(key->attribute_descriptions[0]) *
                r->num_active_vertex_attribute_descriptions);
 
-#if OPT_DYNAMIC_STATES
-    const int regs[] = {
+    const int dyn_key_regs[] = {
         NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0,
         NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3,
         NV_PGRAPH_SETUPRASTER, NV_PGRAPH_CONTROL_1,
     };
-#else
-    const int regs[] = {
+    const int full_key_regs[] = {
         NV_PGRAPH_BLEND,       NV_PGRAPH_CONTROL_0,
         NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_2,
         NV_PGRAPH_CONTROL_3,   NV_PGRAPH_SETUPRASTER,
         NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
         NV_PGRAPH_CONTROL_1,
     };
-#endif
-    assert(ARRAY_SIZE(regs) == ARRAY_SIZE(key->regs));
-    for (int i = 0; i < ARRAY_SIZE(regs); i++) {
-        key->regs[i] = pgraph_reg_r(pg, regs[i]);
+    bool use_dyn = g_config.perf.vk_dynamic_states;
+    const int *key_regs = use_dyn ? dyn_key_regs : full_key_regs;
+    int num_key_regs = use_dyn ? ARRAY_SIZE(dyn_key_regs) : ARRAY_SIZE(full_key_regs);
+    assert(num_key_regs <= (int)ARRAY_SIZE(key->regs));
+    for (int i = 0; i < num_key_regs; i++) {
+        key->regs[i] = pgraph_reg_r(pg, key_regs[i]);
     }
-#if OPT_DYNAMIC_STATES
-    key->regs[5] &= ~(NV_PGRAPH_CONTROL_1_STENCIL_REF |
-                       NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ |
-                       NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
-#endif
+    if (use_dyn) {
+        key->regs[5] &= ~(NV_PGRAPH_CONTROL_1_STENCIL_REF |
+                           NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ |
+                           NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
+    }
 }
 
 static void create_pipeline(PGRAPHState *pg)
@@ -835,7 +836,7 @@ static void create_pipeline(PGRAPHState *pg)
                       NV_PGRAPH_SETUPRASTER_FRONTFACE) ?
                           VK_FRONT_FACE_COUNTER_CLOCKWISE :
                           VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = OPT_DYNAMIC_STATES ? VK_TRUE : VK_FALSE,
+        .depthBiasEnable = g_config.perf.vk_dynamic_states ? VK_TRUE : VK_FALSE,
         .pNext = rasterizer_next_struct,
     };
 
@@ -947,15 +948,15 @@ static void create_pipeline(PGRAPHState *pg)
     VkDynamicState dynamic_states[8] = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
-#if OPT_DYNAMIC_STATES
-        VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-        VK_DYNAMIC_STATE_DEPTH_BIAS,
-        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
-        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
-#endif
     };
-    int num_dynamic_states = OPT_DYNAMIC_STATES ? 7 : 2;
+    int num_dynamic_states = 2;
+    if (g_config.perf.vk_dynamic_states) {
+        dynamic_states[num_dynamic_states++] = VK_DYNAMIC_STATE_BLEND_CONSTANTS;
+        dynamic_states[num_dynamic_states++] = VK_DYNAMIC_STATE_DEPTH_BIAS;
+        dynamic_states[num_dynamic_states++] = VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
+        dynamic_states[num_dynamic_states++] = VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
+        dynamic_states[num_dynamic_states++] = VK_DYNAMIC_STATE_STENCIL_REFERENCE;
+    }
 
     snode->has_dynamic_line_width =
         (r->enabled_physical_device_features.wideLines == VK_TRUE) &&
@@ -1253,16 +1254,16 @@ static void begin_render_pass(PGRAPHState *pg)
 
     assert(r->framebuffer_index > 0);
 
-#if OPT_LOAD_OPS
-    RenderPassState begin_state;
-    init_render_pass_state(pg, &begin_state);
-    begin_state.color_load_op = get_optimal_color_load_op(r);
-    begin_state.zeta_load_op = get_optimal_zeta_load_op(r);
-    begin_state.stencil_load_op = begin_state.zeta_load_op;
-    r->begin_render_pass = get_render_pass(r, &begin_state);
-#else
-    r->begin_render_pass = r->render_pass;
-#endif
+    if (g_config.perf.vk_load_ops) {
+        RenderPassState begin_state;
+        init_render_pass_state(pg, &begin_state);
+        begin_state.color_load_op = get_optimal_color_load_op(r);
+        begin_state.zeta_load_op = get_optimal_zeta_load_op(r);
+        begin_state.stencil_load_op = begin_state.zeta_load_op;
+        r->begin_render_pass = get_render_pass(r, &begin_state);
+    } else {
+        r->begin_render_pass = r->render_pass;
+    }
 
     VkRenderPassBeginInfo render_pass_begin_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -1386,7 +1387,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         VK_LOG("finish: fence signaled frame=%d", r->current_frame);
         r->frame_submitted[r->current_frame] = false;
 
-        int next_frame = (r->current_frame + 1) % NUM_SUBMIT_FRAMES;
+        int next_frame = (r->current_frame + 1) % r->num_submit_frames;
         VK_LOG("finish: advancing frame %d -> %d", r->current_frame, next_frame);
         r->current_frame = next_frame;
         r->command_buffer = r->command_buffers[next_frame * 2];
@@ -1606,35 +1607,35 @@ static void begin_draw(PGRAPHState *pg)
     }
 
     if (!pg->clearing) {
-#if OPT_DYNAMIC_STATES
-        VK_LOG("begin_draw: setting dynamic state (blend/depth_bias/stencil)");
-        float blend_constant[4] = { 0, 0, 0, 0 };
-        uint32_t blend_color = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
-        pgraph_argb_pack32_to_rgba_float(blend_color, blend_constant);
-        vkCmdSetBlendConstants(r->command_buffer, blend_constant);
+        if (g_config.perf.vk_dynamic_states) {
+            VK_LOG("begin_draw: setting dynamic state (blend/depth_bias/stencil)");
+            float blend_constant[4] = { 0, 0, 0, 0 };
+            uint32_t blend_color = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
+            pgraph_argb_pack32_to_rgba_float(blend_color, blend_constant);
+            vkCmdSetBlendConstants(r->command_buffer, blend_constant);
 
-        uint32_t zoffset_bias_raw = pgraph_reg_r(pg, NV_PGRAPH_ZOFFSETBIAS);
-        uint32_t zoffset_factor_raw = pgraph_reg_r(pg, NV_PGRAPH_ZOFFSETFACTOR);
-        float depth_bias_constant, depth_bias_slope;
-        memcpy(&depth_bias_constant, &zoffset_bias_raw, sizeof(float));
-        memcpy(&depth_bias_slope, &zoffset_factor_raw, sizeof(float));
-        vkCmdSetDepthBias(r->command_buffer, depth_bias_constant, 0.0f,
-                          depth_bias_slope);
+            uint32_t zoffset_bias_raw = pgraph_reg_r(pg, NV_PGRAPH_ZOFFSETBIAS);
+            uint32_t zoffset_factor_raw = pgraph_reg_r(pg, NV_PGRAPH_ZOFFSETFACTOR);
+            float depth_bias_constant, depth_bias_slope;
+            memcpy(&depth_bias_constant, &zoffset_bias_raw, sizeof(float));
+            memcpy(&depth_bias_slope, &zoffset_factor_raw, sizeof(float));
+            vkCmdSetDepthBias(r->command_buffer, depth_bias_constant, 0.0f,
+                              depth_bias_slope);
 
-        uint32_t control_1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
-        uint32_t stencil_ref = GET_MASK(control_1,
-                                        NV_PGRAPH_CONTROL_1_STENCIL_REF);
-        uint32_t mask_read = GET_MASK(control_1,
-                                      NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ);
-        uint32_t mask_write = GET_MASK(control_1,
-                                       NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
-        vkCmdSetStencilCompareMask(r->command_buffer,
-                                   VK_STENCIL_FACE_FRONT_AND_BACK, mask_read);
-        vkCmdSetStencilWriteMask(r->command_buffer,
-                                 VK_STENCIL_FACE_FRONT_AND_BACK, mask_write);
-        vkCmdSetStencilReference(r->command_buffer,
-                                 VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref);
-#endif
+            uint32_t control_1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
+            uint32_t stencil_ref = GET_MASK(control_1,
+                                            NV_PGRAPH_CONTROL_1_STENCIL_REF);
+            uint32_t mask_read = GET_MASK(control_1,
+                                          NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ);
+            uint32_t mask_write = GET_MASK(control_1,
+                                           NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
+            vkCmdSetStencilCompareMask(r->command_buffer,
+                                       VK_STENCIL_FACE_FRONT_AND_BACK, mask_read);
+            vkCmdSetStencilWriteMask(r->command_buffer,
+                                     VK_STENCIL_FACE_FRONT_AND_BACK, mask_write);
+            vkCmdSetStencilReference(r->command_buffer,
+                                     VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref);
+        }
 
         bind_descriptor_sets(pg);
         VK_LOG("begin_draw: push_vertex_attr_values");
@@ -1849,36 +1850,43 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
         (NV097_CLEAR_SURFACE_R | NV097_CLEAR_SURFACE_G |
          NV097_CLEAR_SURFACE_B | NV097_CLEAR_SURFACE_A));
 
-#if OPT_CLEAR_REFACTOR
-    bool needs_partial_clear_pipeline = write_color && r->color_binding &&
+    bool needs_partial_clear_pipeline = g_config.perf.vk_clear_refactor &&
+        write_color && r->color_binding &&
         !clear_all_color_channels && (parameter & NV097_CLEAR_SURFACE_COLOR);
 
-    if (needs_partial_clear_pipeline) {
+    if (g_config.perf.vk_clear_refactor) {
+        if (needs_partial_clear_pipeline) {
+            begin_pre_draw(pg);
+            pgraph_vk_begin_debug_marker(r, r->command_buffer,
+                RGBA_BLUE, "Partial Clear %08" HWADDR_PRIx, binding->vram_addr);
+            begin_draw(pg);
+        } else {
+            pgraph_vk_ensure_command_buffer(pg);
+
+            assert(r->color_binding || r->zeta_binding);
+
+            if (r->framebuffer_dirty) {
+                pgraph_vk_ensure_not_in_render_pass(pg);
+                RenderPassState rps;
+                init_render_pass_state(pg, &rps);
+                r->render_pass = get_render_pass(r, &rps);
+                create_frame_buffer(pg);
+                r->framebuffer_dirty = false;
+            }
+            if (r->framebuffer_index == 0) {
+                create_frame_buffer(pg);
+            }
+            if (!r->in_render_pass) {
+                begin_render_pass(pg);
+            }
+            pgraph_vk_begin_debug_marker(r, r->command_buffer,
+                RGBA_BLUE, "Clear %08" HWADDR_PRIx, binding->vram_addr);
+        }
+    } else {
         begin_pre_draw(pg);
         pgraph_vk_begin_debug_marker(r, r->command_buffer,
-            RGBA_BLUE, "Partial Clear %08" HWADDR_PRIx, binding->vram_addr);
-        begin_draw(pg);
-    } else {
-        pgraph_vk_ensure_command_buffer(pg);
-
-        assert(r->color_binding || r->zeta_binding);
-
-        if (r->framebuffer_dirty) {
-            pgraph_vk_ensure_not_in_render_pass(pg);
-            RenderPassState rps;
-            init_render_pass_state(pg, &rps);
-            r->render_pass = get_render_pass(r, &rps);
-            create_frame_buffer(pg);
-            r->framebuffer_dirty = false;
-        }
-        if (r->framebuffer_index == 0) {
-            create_frame_buffer(pg);
-        }
-        if (!r->in_render_pass) {
-            begin_render_pass(pg);
-        }
-        pgraph_vk_begin_debug_marker(r, r->command_buffer,
             RGBA_BLUE, "Clear %08" HWADDR_PRIx, binding->vram_addr);
+        begin_draw(pg);
     }
 
     pgraph_apply_anti_aliasing_factor(pg, &xmin, &ymin);
@@ -1907,7 +1915,7 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
             pgraph_get_clear_color(
                 pg, attachments[num_clear_attachments].clearValue.color.float32);
             num_clear_attachments++;
-        } else if (needs_partial_clear_pipeline) {
+        } else if (needs_partial_clear_pipeline || !g_config.perf.vk_clear_refactor) {
             float blend_constants[4];
             pgraph_get_clear_color(pg, blend_constants);
             vkCmdSetScissor(r->command_buffer, 0, 1, &clear_rect.rect);
@@ -1942,77 +1950,9 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
                               attachments, 1, &clear_rect);
     }
 
-    if (needs_partial_clear_pipeline) {
+    if (needs_partial_clear_pipeline || !g_config.perf.vk_clear_refactor) {
         end_draw(pg);
     }
-#else
-    begin_pre_draw(pg);
-    pgraph_vk_begin_debug_marker(r, r->command_buffer,
-        RGBA_BLUE, "Clear %08" HWADDR_PRIx, binding->vram_addr);
-    begin_draw(pg);
-
-    pgraph_apply_anti_aliasing_factor(pg, &xmin, &ymin);
-    pgraph_apply_anti_aliasing_factor(pg, &scissor_width, &scissor_height);
-    pgraph_apply_scaling_factor(pg, &xmin, &ymin);
-    pgraph_apply_scaling_factor(pg, &scissor_width, &scissor_height);
-
-    VkClearRect clear_rect = {
-        .rect = {
-            .offset = { .x = xmin, .y = ymin },
-            .extent = { .width = scissor_width, .height = scissor_height },
-        },
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
-
-    int num_clear_attachments = 0;
-    VkClearAttachment attachments[2];
-
-    if (write_color && r->color_binding) {
-        if (clear_all_color_channels) {
-            attachments[num_clear_attachments] = (VkClearAttachment){
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .colorAttachment = 0,
-            };
-            pgraph_get_clear_color(
-                pg, attachments[num_clear_attachments].clearValue.color.float32);
-            num_clear_attachments++;
-        } else {
-            float blend_constants[4];
-            pgraph_get_clear_color(pg, blend_constants);
-            vkCmdSetScissor(r->command_buffer, 0, 1, &clear_rect.rect);
-            vkCmdSetBlendConstants(r->command_buffer, blend_constants);
-            vkCmdDraw(r->command_buffer, 3, 1, 0, 0);
-        }
-    }
-
-    if (write_zeta && r->zeta_binding) {
-        int stencil_value = 0;
-        float depth_value = 1.0;
-        pgraph_get_clear_depth_stencil_value(pg, &depth_value, &stencil_value);
-
-        VkImageAspectFlags aspect = 0;
-        if (parameter & NV097_CLEAR_SURFACE_Z) {
-            aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
-        }
-        if ((parameter & NV097_CLEAR_SURFACE_STENCIL) &&
-            (r->zeta_binding->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) {
-            aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
-        }
-
-        attachments[num_clear_attachments++] = (VkClearAttachment){
-            .aspectMask = aspect,
-            .clearValue.depthStencil.depth = depth_value,
-            .clearValue.depthStencil.stencil = stencil_value,
-        };
-    }
-
-    if (num_clear_attachments) {
-        vkCmdClearAttachments(r->command_buffer, num_clear_attachments,
-                              attachments, 1, &clear_rect);
-    }
-    end_draw(pg);
-#endif
     pgraph_vk_end_debug_marker(r, r->command_buffer);
 
     pg->clearing = false;

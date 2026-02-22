@@ -547,11 +547,9 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                        r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
                        buffer_offset);
 
-#if OPT_TEX_NONDRAW_CMD
-    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
+    VkCommandBuffer cmd = g_config.perf.vk_tex_nondraw_cmd
+        ? pgraph_vk_begin_nondraw_commands(pg)
+        : pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     VkBufferMemoryBarrier host_barrier = {
@@ -583,11 +581,11 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
 
     nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT_4);
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_TEX_NONDRAW_CMD
-    pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
+    if (g_config.perf.vk_tex_nondraw_cmd) {
+        pgraph_vk_end_nondraw_commands(pg, cmd);
+    } else {
+        pgraph_vk_end_single_time_commands(pg, cmd);
+    }
 
     // Release decoded texture data
     for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
@@ -622,11 +620,9 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     trace_nv2a_pgraph_surface_render_to_texture(
         surface->vram_addr, surface->width, surface->height);
 
-#if OPT_TEX_NONDRAW_CMD
-    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
+    VkCommandBuffer cmd = g_config.perf.vk_tex_nondraw_cmd
+        ? pgraph_vk_begin_nondraw_commands(pg)
+        : pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     unsigned int scaled_width = surface->width,
@@ -810,11 +806,11 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     texture->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_TEX_NONDRAW_CMD
-    pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
+    if (g_config.perf.vk_tex_nondraw_cmd) {
+        pgraph_vk_end_nondraw_commands(pg, cmd);
+    } else {
+        pgraph_vk_end_single_time_commands(pg, cmd);
+    }
 
     texture->draw_time = surface->draw_time;
 }
@@ -837,11 +833,9 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     trace_nv2a_pgraph_surface_render_to_texture(
         surface->vram_addr, surface->width, surface->height);
 
-#if OPT_TEX_NONDRAW_CMD
-    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
-#else
-    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
-#endif
+    VkCommandBuffer cmd = g_config.perf.vk_tex_nondraw_cmd
+        ? pgraph_vk_begin_nondraw_commands(pg)
+        : pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
     pgraph_vk_transition_image_layout(
@@ -882,11 +876,11 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     texture->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     pgraph_vk_end_debug_marker(r, cmd);
-#if OPT_TEX_NONDRAW_CMD
-    pgraph_vk_end_nondraw_commands(pg, cmd);
-#else
-    pgraph_vk_end_single_time_commands(pg, cmd);
-#endif
+    if (g_config.perf.vk_tex_nondraw_cmd) {
+        pgraph_vk_end_nondraw_commands(pg, cmd);
+    } else {
+        pgraph_vk_end_single_time_commands(pg, cmd);
+    }
 
     texture->draw_time = surface->draw_time;
 }

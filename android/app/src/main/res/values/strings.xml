@@ -101,6 +101,23 @@
   <string name="settings_tcg_optimizer">TCG optimizer peephole</string>
   <string name="settings_tcg_optimizer_desc">Enable setcond+brcond fusion in the code generator (requires restart)</string>
 
+  <string name="settings_vk_renderer_title">Vulkan Renderer</string>
+  <string name="settings_vk_renderer_desc">Advanced Vulkan renderer options (require restart)</string>
+  <string name="settings_vk_buffered_submit">Buffered submit</string>
+  <string name="settings_vk_buffered_submit_desc">Double-buffer command submissions to reduce GPU idle time</string>
+  <string name="settings_vk_dynamic_states">Dynamic states</string>
+  <string name="settings_vk_dynamic_states_desc">Use Vulkan dynamic state for blend, depth bias, and stencil</string>
+  <string name="settings_vk_load_ops">Optimal load ops</string>
+  <string name="settings_vk_load_ops_desc">Choose optimal render pass load operations to reduce unnecessary reads</string>
+  <string name="settings_vk_clear_refactor">Clear refactor</string>
+  <string name="settings_vk_clear_refactor_desc">Use optimized clear path that avoids full draw pipeline for clears</string>
+  <string name="settings_vk_compute_swizzle">Compute swizzle</string>
+  <string name="settings_vk_compute_swizzle_desc">Use compute shaders for surface swizzle/unswizzle operations</string>
+  <string name="settings_vk_tex_nondraw_cmd">Texture non-draw commands</string>
+  <string name="settings_vk_tex_nondraw_cmd_desc">Use non-draw command buffers for texture upload operations</string>
+  <string name="settings_vk_precise_barriers">Precise barriers</string>
+  <string name="settings_vk_precise_barriers_desc">Use precise pipeline stage barriers instead of ALL_COMMANDS</string>
+
   <string name="settings_hdd_title">Hard Disk</string>
   <string name="settings_hdd_desc">Manage the emulated Xbox hard disk image</string>
   <string name="settings_clear_cache">Clear Cache Partitions (X, Y, Z)</string>

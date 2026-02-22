@@ -291,6 +291,13 @@ struct config {
         bool cache_code;
         bool native_float_ops;
         bool tcg_optimizer;
+        bool vk_buffered_submit;
+        bool vk_dynamic_states;
+        bool vk_load_ops;
+        bool vk_clear_refactor;
+        bool vk_compute_swizzle;
+        bool vk_tex_nondraw_cmd;
+        bool vk_precise_barriers;
     } perf;
 };
 

@@ -77,6 +77,22 @@ void MainMenuGeneralView::Draw()
     Toggle("TCG optimizer peephole", &g_config.perf.tcg_optimizer,
            "Enable setcond+brcond fusion in the code generator (requires restart)");
 
+    SectionTitle("Vulkan Renderer");
+    Toggle("Buffered submit", &g_config.perf.vk_buffered_submit,
+           "Double-buffer command submissions to reduce GPU idle time (requires restart)");
+    Toggle("Dynamic states", &g_config.perf.vk_dynamic_states,
+           "Use Vulkan dynamic state for blend, depth bias, and stencil (requires restart)");
+    Toggle("Optimal load ops", &g_config.perf.vk_load_ops,
+           "Choose optimal render pass load operations to reduce unnecessary reads (requires restart)");
+    Toggle("Clear refactor", &g_config.perf.vk_clear_refactor,
+           "Use optimized clear path that avoids full draw pipeline for clears (requires restart)");
+    Toggle("Compute swizzle", &g_config.perf.vk_compute_swizzle,
+           "Use compute shaders for surface swizzle/unswizzle operations (requires restart)");
+    Toggle("Texture non-draw commands", &g_config.perf.vk_tex_nondraw_cmd,
+           "Use non-draw command buffers for texture upload operations (requires restart)");
+    Toggle("Precise barriers", &g_config.perf.vk_precise_barriers,
+           "Use precise pipeline stage barriers instead of ALL_COMMANDS (requires restart)");
+
     SectionTitle("Miscellaneous");
     Toggle("Skip startup animation", &g_config.general.skip_boot_anim,
            "Skip the full Xbox boot animation sequence");

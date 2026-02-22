@@ -379,3 +379,24 @@ perf:
   tcg_optimizer:
     type: bool
     default: true
+  vk_buffered_submit:
+    type: bool
+    default: true
+  vk_dynamic_states:
+    type: bool
+    default: true
+  vk_load_ops:
+    type: bool
+    default: true
+  vk_clear_refactor:
+    type: bool
+    default: false
+  vk_compute_swizzle:
+    type: bool
+    default: true
+  vk_tex_nondraw_cmd:
+    type: bool
+    default: false
+  vk_precise_barriers:
+    type: bool
+    default: true
