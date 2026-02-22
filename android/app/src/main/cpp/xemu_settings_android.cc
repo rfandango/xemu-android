@@ -101,6 +101,7 @@ static void xemu_settings_apply_defaults(void)
 
     g_config.perf.hard_fpu = true;
     g_config.perf.cache_shaders = true;
+    g_config.perf.cache_code = true;
 }
 
 // Optimized parsers - avoid string allocations
@@ -261,6 +262,9 @@ bool xemu_settings_load(void)
         }
         if (auto cache_shaders = perf["cache_shaders"].value<bool>()) {
             g_config.perf.cache_shaders = *cache_shaders;
+        }
+        if (auto cache_code = perf["cache_code"].value<bool>()) {
+            g_config.perf.cache_code = *cache_code;
         }
 
         // Audio settings

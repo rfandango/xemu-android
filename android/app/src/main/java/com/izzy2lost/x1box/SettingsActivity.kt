@@ -20,6 +20,7 @@ class SettingsActivity : AppCompatActivity() {
   private lateinit var btnSelectDriver: MaterialButton
   private lateinit var btnResetDriver: MaterialButton
   private lateinit var switchShowFps: MaterialSwitch
+  private lateinit var switchCacheCode: MaterialSwitch
 
   private val pickDriverZip =
     registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -38,6 +39,7 @@ class SettingsActivity : AppCompatActivity() {
     btnSelectDriver = findViewById(R.id.btn_select_driver)
     btnResetDriver = findViewById(R.id.btn_reset_driver)
     switchShowFps = findViewById(R.id.switch_show_fps)
+    switchCacheCode = findViewById(R.id.switch_cache_code)
 
     findViewById<View>(R.id.btn_settings_back).setOnClickListener { finish() }
 
@@ -67,6 +69,11 @@ class SettingsActivity : AppCompatActivity() {
     switchShowFps.isChecked = prefs.getBoolean("show_fps", true)
     switchShowFps.setOnCheckedChangeListener { _, checked ->
       prefs.edit().putBoolean("show_fps", checked).apply()
+    }
+
+    switchCacheCode.isChecked = prefs.getBoolean("cache_code", true)
+    switchCacheCode.setOnCheckedChangeListener { _, checked ->
+      prefs.edit().putBoolean("cache_code", checked).apply()
     }
 
     refreshDriverStatus()

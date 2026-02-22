@@ -92,6 +92,11 @@
   <string name="settings_gpu_driver_install_failed">Failed to install driver. The ZIP may be invalid or incompatible.</string>
   <string name="settings_gpu_driver_none_available">No driver ZIPs found. Use \"Install Driver from ZIP\" to add one first.</string>
 
+  <string name="settings_perf_title">Performance</string>
+  <string name="settings_perf_desc">Options that affect emulation speed and startup time</string>
+  <string name="settings_cache_code">Cache translated code</string>
+  <string name="settings_cache_code_desc">Pre-translate frequently used code blocks on startup to reduce stutter (requires restart)</string>
+
   <string name="settings_display_title">Display</string>
   <string name="settings_show_fps">Show FPS counter</string>
 </resources>
