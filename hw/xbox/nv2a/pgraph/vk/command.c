@@ -58,7 +58,7 @@ static void create_command_buffers(PGRAPHState *pg)
     r->current_frame = 0;
     r->command_buffer = r->command_buffers[0];
     r->aux_command_buffer = r->command_buffers[1];
-    for (int i = 0; i < r->num_submit_frames; i++) {
+    for (int i = 0; i < NUM_SUBMIT_FRAMES; i++) {
         r->frame_submitted[i] = false;
     }
 }

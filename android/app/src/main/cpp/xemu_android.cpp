@@ -381,16 +381,6 @@ struct SetupFiles {
   std::string inline_aio_flag_path;
 };
 
-struct VkRendererFlags {
-  bool buffered_submit = true;
-  bool dynamic_states = true;
-  bool load_ops = true;
-  bool clear_refactor = false;
-  bool compute_swizzle = true;
-  bool tex_nondraw_cmd = false;
-  bool precise_barriers = true;
-};
-
 struct DisplaySettings {
   int surface_scale = 1;
   bool vsync = false;
@@ -407,7 +397,6 @@ static bool WriteConfigToml(const std::string& config_path,
                             bool cache_code = true,
                             bool native_float_ops = true,
                             bool tcg_optimizer = true,
-                            VkRendererFlags vk_flags = {},
                             DisplaySettings disp = {}) {
   if (config_path.empty()) return false;
   toml::table tbl;
@@ -478,13 +467,6 @@ static bool WriteConfigToml(const std::string& config_path,
   perf->insert_or_assign("cache_code", cache_code);
   perf->insert_or_assign("native_float_ops", native_float_ops);
   perf->insert_or_assign("tcg_optimizer", tcg_optimizer);
-  perf->insert_or_assign("vk_buffered_submit", vk_flags.buffered_submit);
-  perf->insert_or_assign("vk_dynamic_states", vk_flags.dynamic_states);
-  perf->insert_or_assign("vk_load_ops", vk_flags.load_ops);
-  perf->insert_or_assign("vk_clear_refactor", vk_flags.clear_refactor);
-  perf->insert_or_assign("vk_compute_swizzle", vk_flags.compute_swizzle);
-  perf->insert_or_assign("vk_tex_nondraw_cmd", vk_flags.tex_nondraw_cmd);
-  perf->insert_or_assign("vk_precise_barriers", vk_flags.precise_barriers);
 
   files->insert_or_assign("bootrom_path", mcpx);
   files->insert_or_assign("flashrom_path", flash);
@@ -599,15 +581,6 @@ static SetupFiles SyncSetupFiles() {
   bool cacheCode = GetPrefBool(env, activity, "cache_code", true);
   bool nativeFloatOps = GetPrefBool(env, activity, "native_float_ops", true);
   bool tcgOptimizer = GetPrefBool(env, activity, "tcg_optimizer", true);
-  VkRendererFlags vkFlags;
-  vkFlags.buffered_submit = GetPrefBool(env, activity, "vk_buffered_submit", true);
-  vkFlags.dynamic_states = GetPrefBool(env, activity, "vk_dynamic_states", true);
-  vkFlags.load_ops = GetPrefBool(env, activity, "vk_load_ops", true);
-  vkFlags.clear_refactor = GetPrefBool(env, activity, "vk_clear_refactor", false);
-  vkFlags.compute_swizzle = GetPrefBool(env, activity, "vk_compute_swizzle", true);
-  vkFlags.tex_nondraw_cmd = GetPrefBool(env, activity, "vk_tex_nondraw_cmd", false);
-  vkFlags.precise_barriers = GetPrefBool(env, activity, "vk_precise_barriers", true);
-
   DisplaySettings dispSettings;
   dispSettings.surface_scale = GetPrefInt(env, activity, "surface_scale", 1);
   dispSettings.vsync = GetPrefBool(env, activity, "vsync", false);
@@ -617,7 +590,7 @@ static SetupFiles SyncSetupFiles() {
   if (!arStr.empty()) dispSettings.aspect_ratio = arStr;
 
   WriteConfigToml(out.config_path, out.mcpx, out.flash, out.hdd, out.dvd, out.eeprom,
-                  cacheCode, nativeFloatOps, tcgOptimizer, vkFlags, dispSettings);
+                  cacheCode, nativeFloatOps, tcgOptimizer, dispSettings);
   LogInfoFmt("SyncSetupFiles: config %s", out.config_path.c_str());
   LogInfoFmt("Resolved mcpx=%s", out.mcpx.c_str());
   LogInfoFmt("Resolved flash=%s", out.flash.c_str());

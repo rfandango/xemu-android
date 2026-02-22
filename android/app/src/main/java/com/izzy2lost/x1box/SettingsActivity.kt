@@ -96,14 +96,6 @@ class SettingsActivity : AppCompatActivity() {
       prefs.edit().putBoolean("tcg_optimizer", checked).apply()
     }
 
-    wireSwitch(R.id.switch_vk_buffered_submit, "vk_buffered_submit", true)
-    wireSwitch(R.id.switch_vk_dynamic_states, "vk_dynamic_states", true)
-    wireSwitch(R.id.switch_vk_load_ops, "vk_load_ops", true)
-    wireSwitch(R.id.switch_vk_clear_refactor, "vk_clear_refactor", false)
-    wireSwitch(R.id.switch_vk_compute_swizzle, "vk_compute_swizzle", true)
-    wireSwitch(R.id.switch_vk_tex_nondraw_cmd, "vk_tex_nondraw_cmd", false)
-    wireSwitch(R.id.switch_vk_precise_barriers, "vk_precise_barriers", true)
-
     setupResolutionScale()
     wireSwitch(R.id.switch_vsync, "vsync", false)
     setupFilteringPicker()

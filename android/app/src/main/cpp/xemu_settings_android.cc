@@ -104,13 +104,6 @@ static void xemu_settings_apply_defaults(void)
     g_config.perf.cache_code = true;
     g_config.perf.native_float_ops = true;
     g_config.perf.tcg_optimizer = true;
-    g_config.perf.vk_buffered_submit = true;
-    g_config.perf.vk_dynamic_states = true;
-    g_config.perf.vk_load_ops = true;
-    g_config.perf.vk_clear_refactor = false;
-    g_config.perf.vk_compute_swizzle = true;
-    g_config.perf.vk_tex_nondraw_cmd = false;
-    g_config.perf.vk_precise_barriers = true;
 }
 
 // Optimized parsers - avoid string allocations
@@ -317,27 +310,6 @@ bool xemu_settings_load(void)
         }
         if (auto tcg_optimizer = perf["tcg_optimizer"].value<bool>()) {
             g_config.perf.tcg_optimizer = *tcg_optimizer;
-        }
-        if (auto v = perf["vk_buffered_submit"].value<bool>()) {
-            g_config.perf.vk_buffered_submit = *v;
-        }
-        if (auto v = perf["vk_dynamic_states"].value<bool>()) {
-            g_config.perf.vk_dynamic_states = *v;
-        }
-        if (auto v = perf["vk_load_ops"].value<bool>()) {
-            g_config.perf.vk_load_ops = *v;
-        }
-        if (auto v = perf["vk_clear_refactor"].value<bool>()) {
-            g_config.perf.vk_clear_refactor = *v;
-        }
-        if (auto v = perf["vk_compute_swizzle"].value<bool>()) {
-            g_config.perf.vk_compute_swizzle = *v;
-        }
-        if (auto v = perf["vk_tex_nondraw_cmd"].value<bool>()) {
-            g_config.perf.vk_tex_nondraw_cmd = *v;
-        }
-        if (auto v = perf["vk_precise_barriers"].value<bool>()) {
-            g_config.perf.vk_precise_barriers = *v;
         }
 
         // Audio settings

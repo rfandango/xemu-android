@@ -41,9 +41,16 @@
 #include "debug.h"
 #include "constants.h"
 #include "glsl.h"
-#include "ui/xemu-settings.h"
 
 #define HAVE_EXTERNAL_MEMORY 0
+
+#define OPT_N_BUFFERED_SUBMIT   1
+#define OPT_DYNAMIC_STATES      1
+#define OPT_LOAD_OPS            1
+#define OPT_CLEAR_REFACTOR      0
+#define OPT_COMPUTE_SWIZZLE     1
+#define OPT_TEX_NONDRAW_CMD     0
+#define OPT_PRECISE_BARRIERS    1
 
 typedef struct QueueFamilyIndices {
     int queue_family;
@@ -70,7 +77,7 @@ typedef struct PipelineKey {
     bool clear;
     RenderPassState render_pass_state;
     ShaderState shader_state;
-    uint32_t regs[9];
+    uint32_t regs[OPT_DYNAMIC_STATES ? 6 : 9];
     VkVertexInputBindingDescription binding_descriptions[NV2A_VERTEXSHADER_ATTRIBUTES];
     VkVertexInputAttributeDescription attribute_descriptions[NV2A_VERTEXSHADER_ATTRIBUTES];
 } PipelineKey;
@@ -347,14 +354,13 @@ typedef struct PGRAPHVkState {
     VmaAllocator allocator;
     uint32_t allocator_last_submit_index;
 
-#define NUM_SUBMIT_FRAMES_MAX 2
-    int num_submit_frames;
+#define NUM_SUBMIT_FRAMES (OPT_N_BUFFERED_SUBMIT ? 2 : 1)
     VkQueue queue;
     VkCommandPool command_pool;
-    VkCommandBuffer command_buffers[NUM_SUBMIT_FRAMES_MAX * 2];
-    VkSemaphore frame_semaphores[NUM_SUBMIT_FRAMES_MAX];
-    VkFence frame_fences[NUM_SUBMIT_FRAMES_MAX];
-    bool frame_submitted[NUM_SUBMIT_FRAMES_MAX];
+    VkCommandBuffer command_buffers[NUM_SUBMIT_FRAMES * 2];
+    VkSemaphore frame_semaphores[NUM_SUBMIT_FRAMES];
+    VkFence frame_fences[NUM_SUBMIT_FRAMES];
+    bool frame_submitted[NUM_SUBMIT_FRAMES];
     int current_frame;
 
     VkCommandBuffer command_buffer;
