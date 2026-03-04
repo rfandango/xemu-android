@@ -683,7 +683,26 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         .vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2,
     };
 
-    uint32_t device_api_version = r->device_props.apiVersion;
+    const uint32_t device_api_version = r->device_props.apiVersion;
+    const uint32_t vma_compiled_api_version = VK_MAKE_VERSION(
+        (uint32_t)(VMA_VULKAN_VERSION / 1000000),
+        (uint32_t)((VMA_VULKAN_VERSION / 1000) % 1000),
+        (uint32_t)(VMA_VULKAN_VERSION % 1000));
+    uint32_t vma_api_version = device_api_version;
+
+    if (vma_api_version > vma_compiled_api_version) {
+        vma_api_version = vma_compiled_api_version;
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+                            "Clamping VMA API version %u.%u.%u to %u.%u.%u",
+                            VK_API_VERSION_MAJOR(device_api_version),
+                            VK_API_VERSION_MINOR(device_api_version),
+                            VK_API_VERSION_PATCH(device_api_version),
+                            VK_API_VERSION_MAJOR(vma_api_version),
+                            VK_API_VERSION_MINOR(vma_api_version),
+                            VK_API_VERSION_PATCH(vma_api_version));
+#endif
+    }
 
     if (device_api_version >= VK_API_VERSION_1_3) {
         vulkanFunctions.vkGetDeviceBufferMemoryRequirements =
@@ -696,7 +715,7 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         .flags = (r->memory_budget_extension_enabled ?
                       VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT :
                       0),
-        .vulkanApiVersion = device_api_version,
+        .vulkanApiVersion = vma_api_version,
         .instance = r->instance,
         .physicalDevice = r->physical_device,
         .device = r->device,
