@@ -165,14 +165,14 @@ if(NOT ANDROID_API)
 endif()
 
 set(ANDROID_TRIPLE "aarch64-none-linux-android${ANDROID_API}")
-set(NDK_TOOLCHAIN "${NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/bin")
+set(NDK_TOOLCHAIN "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin")
 
 if(XEMU_XISO_CONVERTER_BUILD_ENABLED)
   if(CMAKE_HOST_WIN32)
     if(NOT DEFINED XISO_CONVERTER_RUSTUP_TOOLCHAIN OR
        XISO_CONVERTER_RUSTUP_TOOLCHAIN STREQUAL "")
       set(XISO_CONVERTER_RUSTUP_TOOLCHAIN
-        "stable-x86_64-pc-windows-gnu"
+        "stable-x86_64-unknown-linux-gnu"
         CACHE STRING "Rustup host toolchain for ISO->XISO converter"
         FORCE
       )
@@ -276,7 +276,7 @@ file(WRITE "${GLIB_CROSS_FILE}"
 "\n"
 "[properties]\n"
 "needs_exe_wrapper = true\n"
-"sys_root = '${NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/sysroot'\n"
+"sys_root = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot'\n"
 "c_args = ['--target=${ANDROID_TRIPLE}', '-I${CMAKE_CURRENT_LIST_DIR}/iconv_stub']\n"
 "cpp_args = ['--target=${ANDROID_TRIPLE}', '-I${CMAKE_CURRENT_LIST_DIR}/iconv_stub']\n"
 "c_link_args = ['--target=${ANDROID_TRIPLE}', '-L${ICONV_STUB_DIR}', '-liconv']\n"

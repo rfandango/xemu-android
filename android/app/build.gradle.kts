@@ -70,6 +70,13 @@ android {
       ndk {
         debugSymbolLevel = "NONE"
       }
+      externalNativeBuild {
+        cmake {
+          arguments += listOf(
+            "-DCMAKE_BUILD_TYPE=Release"
+          )
+        }
+      }
     }
     release {
       isMinifyEnabled = false
