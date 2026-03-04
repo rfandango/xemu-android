@@ -20,6 +20,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "xemu-settings.h"
 
