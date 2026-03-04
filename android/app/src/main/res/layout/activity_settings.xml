@@ -140,6 +140,40 @@
 
           </com.google.android.material.button.MaterialButtonToggleGroup>
 
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:text="@string/settings_frame_rate_limit"
+            android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/toggle_frame_rate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            app:selectionRequired="true"
+            app:singleSelection="true">
+
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_fps_30"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_weight="1"
+              android:text="@string/settings_frame_rate_limit_30" />
+
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_fps_60"
+              style="?attr/materialButtonOutlinedStyle"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_weight="1"
+              android:text="@string/settings_frame_rate_limit_60" />
+
+          </com.google.android.material.button.MaterialButtonToggleGroup>
+
           <!-- ── VULKAN DRIVER ── -->
           <TextView
             android:layout_width="match_parent"

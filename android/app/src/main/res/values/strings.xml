@@ -89,6 +89,9 @@
   <string name="settings_display_mode_stretch">Stretch</string>
   <string name="settings_display_mode_4_3">4:3</string>
   <string name="settings_display_mode_16_9">16:9</string>
+  <string name="settings_frame_rate_limit">Frame Rate Limit</string>
+  <string name="settings_frame_rate_limit_30">30 FPS</string>
+  <string name="settings_frame_rate_limit_60">60 FPS</string>
   <string name="settings_resolution_scale">Internal Resolution Scale</string>
   <string name="settings_resolution_scale_1x">1x (Native 480p)</string>
   <string name="settings_resolution_scale_2x">2x (960p)</string>

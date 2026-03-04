@@ -575,6 +575,7 @@ cleanup:
 
 struct EmulatorSettings {
   int surface_scale    = 1;         // 1, 2, or 3
+  int frame_rate_limit = 60;        // 30 or 60
   std::string tcg_thread = "multi"; // "single" or "multi"
   bool use_dsp         = false;
   bool hrtf            = true;
@@ -658,6 +659,13 @@ static bool WriteConfigToml(const std::string& config_path,
   perf->insert_or_assign("hard_fpu", settings.hard_fpu);
   android->insert_or_assign("tcg_thread",
     (settings.tcg_thread == "single") ? "single" : "multi");
+  {
+    int frame_rate_limit = settings.frame_rate_limit;
+    if (frame_rate_limit != 30 && frame_rate_limit != 60) {
+      frame_rate_limit = 60;
+    }
+    android->insert_or_assign("frame_rate_limit", frame_rate_limit);
+  }
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
@@ -790,6 +798,12 @@ static SetupFiles SyncSetupFiles() {
 
   EmulatorSettings emuSettings;
   emuSettings.surface_scale  = GetPrefInt(env, activity, "setting_surface_scale", 1);
+  emuSettings.frame_rate_limit =
+      GetPrefInt(env, activity, "setting_frame_rate_limit", 60);
+  if (emuSettings.frame_rate_limit != 30 &&
+      emuSettings.frame_rate_limit != 60) {
+    emuSettings.frame_rate_limit = 60;
+  }
   emuSettings.use_dsp        = GetPrefBool(env, activity, "setting_use_dsp", false);
   emuSettings.hrtf           = GetPrefBool(env, activity, "setting_hrtf", true);
   emuSettings.cache_shaders  = GetPrefBool(env, activity, "setting_cache_shaders", true);

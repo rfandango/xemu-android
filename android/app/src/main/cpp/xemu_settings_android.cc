@@ -213,6 +213,7 @@ bool xemu_settings_load(void)
     setenv("XEMU_ANDROID_TCG_TUNING", "1", 1);
     setenv("XEMU_ANDROID_TCG_THREAD", "multi", 1);
     setenv("XEMU_ANDROID_TCG_TB_SIZE", "128", 1);
+    setenv("XEMU_ANDROID_TARGET_FPS", "60", 1);
 
     const char *path = xemu_settings_get_path();
     if (!path || *path == '\0') {
@@ -326,6 +327,16 @@ bool xemu_settings_load(void)
                                     "Ignoring android.tcg_thread=%s (expected single|multi)",
                                     tcg_thread->c_str());
             }
+        }
+        if (auto frame_rate_limit =
+                android_cfg["frame_rate_limit"].value<int64_t>()) {
+            int fps = (int)*frame_rate_limit;
+            if (fps != 30 && fps != 60) {
+                fps = 60;
+            }
+            char fps_str[16];
+            snprintf(fps_str, sizeof(fps_str), "%d", fps);
+            setenv("XEMU_ANDROID_TARGET_FPS", fps_str, 1);
         }
         if (auto tcg_tb_size = android_cfg["tcg_tb_size"].value<int64_t>()) {
             int tb_size = (int)*tcg_tb_size;

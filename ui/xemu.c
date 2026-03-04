@@ -132,6 +132,8 @@ static bool g_android_use_hud = false;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
 static uint64_t g_android_frame_counter = 0;
+static int g_android_target_fps = 60;
+static int64_t g_android_frame_interval_ns = 16666666;
 static GLuint g_android_blit_prog;
 static GLuint g_android_blit_vao;
 static GLuint g_android_blit_vbo;
@@ -206,6 +208,29 @@ static GLuint android_gl_compile_shader(GLenum type, const char *src)
 void xemu_android_set_display_mode_setting(int mode)
 {
     g_android_display_mode = mode;
+}
+
+static void xemu_android_refresh_frame_limit_from_env(void)
+{
+    int fps = 60;
+    const char *fps_env = SDL_getenv("XEMU_ANDROID_TARGET_FPS");
+    if (fps_env && fps_env[0] != '\0') {
+        char *endptr = NULL;
+        long parsed = strtol(fps_env, &endptr, 10);
+        if (endptr != fps_env && (!endptr || *endptr == '\0')) {
+            fps = (int)parsed;
+        }
+    }
+
+    if (fps != 30 && fps != 60) {
+        fps = 60;
+    }
+
+    g_android_target_fps = fps;
+    g_android_frame_interval_ns = 1000000000LL / g_android_target_fps;
+    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                        "android: target FPS set to %d",
+                        g_android_target_fps);
 }
 
 static bool android_blit_init(void)
@@ -1377,6 +1402,7 @@ void xemu_android_display_loop(void)
         }
     }
 #ifdef __ANDROID__
+    xemu_android_refresh_frame_limit_from_env();
     SDL_GL_SetSwapInterval(g_config.display.window.vsync ? 1 : 0);
     if (g_android_use_hud) {
         xemu_hud_init(m_window, m_context);
@@ -1825,10 +1851,14 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     qemu_mutex_unlock_main_loop();
 
     /*
-     * Throttle to make sure swaps happen at 60Hz
+     * Throttle to keep swaps at the target frame rate.
      */
     static int64_t last_update = 0;
+#ifdef __ANDROID__
+    int64_t deadline = last_update + g_android_frame_interval_ns;
+#else
     int64_t deadline = last_update + 16666666;
+#endif
 
 #ifdef DEBUG_XEMU_C
     int64_t sleep_acc = 0;
