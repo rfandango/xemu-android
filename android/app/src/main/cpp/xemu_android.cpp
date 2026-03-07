@@ -11,6 +11,7 @@
 #include <jni.h>
 
 #include <cctype>
+#include <cstdint>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,13 @@
 #include <unistd.h>
 
 #include "xemu-settings.h"
+
+struct Error;
+struct AddfdInfo;
+extern "C" AddfdInfo* monitor_fdset_add_fd(int fd, bool has_fdset_id,
+                                           int64_t fdset_id,
+                                           const char* opaque,
+                                           Error** errp);
 
 namespace {
 constexpr const char* kLogTag = "xemu-android";
@@ -55,6 +63,8 @@ static void LogErrorInt(const char* fmt, int value) {
 static void LogErrorFmt(const char* fmt, const char* detail) {
   __android_log_print(ANDROID_LOG_ERROR, kLogTag, fmt, detail);
 }
+
+static int g_next_dvd_fdset_id = 9000;
 
 static bool EnsureDirExists(const std::string& path) {
   if (path.empty()) return false;
@@ -417,6 +427,11 @@ static int GetPrefInt(JNIEnv* env, jobject activity, const char* key, int defVal
   return out;
 }
 
+static bool IsSeekableFd(int fd) {
+  errno = 0;
+  return lseek(fd, 0, SEEK_CUR) != static_cast<off_t>(-1);
+}
+
 static bool CopyUriToPath(JNIEnv* env, jobject activity, const std::string& uriString, const std::string& path) {
   if (!env || !activity || uriString.empty() || path.empty()) return false;
 
@@ -574,6 +589,127 @@ cleanup:
   if (resolver) env->DeleteLocalRef(resolver);
   if (activityClass) env->DeleteLocalRef(activityClass);
   return success;
+}
+
+static std::string OpenUriAsReadOnlyFdPath(JNIEnv* env,
+                                           jobject activity,
+                                           const std::string& uriString) {
+  if (!env || !activity || uriString.empty()) {
+    return {};
+  }
+
+  std::string out;
+  jclass activityClass = nullptr;
+  jobject resolver = nullptr;
+  jclass resolverClass = nullptr;
+  jclass uriClass = nullptr;
+  jobject uri = nullptr;
+  jobject parcelFd = nullptr;
+  jclass parcelFdClass = nullptr;
+
+  activityClass = env->GetObjectClass(activity);
+  if (!activityClass) {
+    goto cleanup;
+  }
+
+  {
+    jmethodID getContentResolver = env->GetMethodID(
+        activityClass, "getContentResolver",
+        "()Landroid/content/ContentResolver;");
+    if (!getContentResolver) {
+      goto cleanup;
+    }
+    resolver = env->CallObjectMethod(activity, getContentResolver);
+    if (HasException(env, "getContentResolver") || !resolver) {
+      goto cleanup;
+    }
+  }
+
+  uriClass = env->FindClass("android/net/Uri");
+  if (!uriClass) {
+    goto cleanup;
+  }
+  {
+    jmethodID parse = env->GetStaticMethodID(
+        uriClass, "parse", "(Ljava/lang/String;)Landroid/net/Uri;");
+    if (!parse) {
+      goto cleanup;
+    }
+    jstring juri = env->NewStringUTF(uriString.c_str());
+    if (!juri) {
+      goto cleanup;
+    }
+    uri = env->CallStaticObjectMethod(uriClass, parse, juri);
+    env->DeleteLocalRef(juri);
+    if (HasException(env, "Uri.parse") || !uri) {
+      goto cleanup;
+    }
+  }
+
+  resolverClass = env->GetObjectClass(resolver);
+  if (!resolverClass) {
+    goto cleanup;
+  }
+  {
+    jmethodID openFileDescriptor = env->GetMethodID(
+        resolverClass, "openFileDescriptor",
+        "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;");
+    if (!openFileDescriptor) {
+      goto cleanup;
+    }
+
+    jstring readMode = env->NewStringUTF("r");
+    if (!readMode) {
+      goto cleanup;
+    }
+    parcelFd = env->CallObjectMethod(resolver, openFileDescriptor, uri, readMode);
+    env->DeleteLocalRef(readMode);
+    if (HasException(env, "openFileDescriptor") || !parcelFd) {
+      goto cleanup;
+    }
+  }
+
+  parcelFdClass = env->GetObjectClass(parcelFd);
+  if (!parcelFdClass) {
+    goto cleanup;
+  }
+  {
+    jmethodID detachFd = env->GetMethodID(parcelFdClass, "detachFd", "()I");
+    if (!detachFd) {
+      goto cleanup;
+    }
+    jint fd = env->CallIntMethod(parcelFd, detachFd);
+    if (HasException(env, "ParcelFileDescriptor.detachFd") || fd < 0) {
+      goto cleanup;
+    }
+    if (!IsSeekableFd(fd)) {
+      LogInfo("DVD descriptor is not seekable; falling back to staged copy");
+      close(fd);
+      goto cleanup;
+    }
+
+    {
+      const int fdsetId = g_next_dvd_fdset_id++;
+      AddfdInfo* fdinfo =
+          monitor_fdset_add_fd(fd, true, fdsetId, "android-dvd", nullptr);
+      if (!fdinfo) {
+        LogError("Failed to register DVD fd with QEMU fdset");
+        close(fd);
+        goto cleanup;
+      }
+      out = "/dev/fdset/" + std::to_string(fdsetId);
+    }
+  }
+
+cleanup:
+  if (parcelFdClass) env->DeleteLocalRef(parcelFdClass);
+  if (parcelFd) env->DeleteLocalRef(parcelFd);
+  if (uri) env->DeleteLocalRef(uri);
+  if (uriClass) env->DeleteLocalRef(uriClass);
+  if (resolverClass) env->DeleteLocalRef(resolverClass);
+  if (resolver) env->DeleteLocalRef(resolver);
+  if (activityClass) env->DeleteLocalRef(activityClass);
+  return out;
 }
 
 struct EmulatorSettings {
@@ -796,11 +932,16 @@ static SetupFiles SyncSetupFiles() {
     out.dvd = dvdPath;
   }
   if (out.dvd.empty() && !dvdUri.empty()) {
-    out.dvd = base + "/dvd.iso";
-    if (CopyUriToPath(env, activity, dvdUri, out.dvd)) {
-      LogInfo("DVD image synced to app storage");
+    out.dvd = OpenUriAsReadOnlyFdPath(env, activity, dvdUri);
+    if (!out.dvd.empty()) {
+      LogInfoFmt("DVD image opened directly from SAF fd: %s", out.dvd.c_str());
     } else {
-      LogError("Failed to sync DVD image");
+      out.dvd = base + "/dvd.iso";
+      if (CopyUriToPath(env, activity, dvdUri, out.dvd)) {
+        LogInfo("DVD image synced to app storage");
+      } else {
+        LogError("Failed to sync DVD image");
+      }
     }
   }
 

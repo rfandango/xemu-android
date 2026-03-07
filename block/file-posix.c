@@ -208,6 +208,39 @@ typedef struct BDRVRawReopenState {
     bool check_cache_dropped;
 } BDRVRawReopenState;
 
+#ifdef __ANDROID__
+static bool raw_android_fd_path(const char *filename)
+{
+    return filename &&
+        (g_str_has_prefix(filename, "/proc/self/fd/") ||
+         g_str_has_prefix(filename, "/dev/fdset/"));
+}
+
+static bool raw_android_seekable_fd(BlockDriverState *bs, int fd)
+{
+    off_t current;
+
+    if (!raw_android_fd_path(bs->filename)) {
+        return false;
+    }
+
+    current = lseek(fd, 0, SEEK_CUR);
+    if (current < 0) {
+        current = 0;
+    }
+
+    if (lseek(fd, 0, SEEK_END) < 0) {
+        return false;
+    }
+
+    if (lseek(fd, current, SEEK_SET) < 0) {
+        lseek(fd, 0, SEEK_SET);
+    }
+
+    return true;
+}
+#endif
+
 static int fd_open(BlockDriverState *bs)
 {
     BDRVRawState *s = bs->opaque;
@@ -785,13 +818,22 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
         goto fail;
     }
 
+#ifdef __ANDROID__
+    bool android_seekable_fd = !device &&
+        !S_ISREG(st.st_mode) &&
+        (s->open_flags & O_ACCMODE) == O_RDONLY &&
+        raw_android_seekable_fd(bs, s->fd);
+#else
+    bool android_seekable_fd = false;
+#endif
+
     if (!device) {
-        if (!S_ISREG(st.st_mode)) {
+        if (!S_ISREG(st.st_mode) && !android_seekable_fd) {
             error_setg(errp, "'%s' driver requires '%s' to be a regular file",
                        bs->drv->format_name, bs->filename);
             ret = -EINVAL;
             goto fail;
-        } else {
+        } else if (S_ISREG(st.st_mode)) {
             s->has_fallocate = true;
         }
     } else {

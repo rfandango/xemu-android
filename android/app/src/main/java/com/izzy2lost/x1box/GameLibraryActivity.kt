@@ -208,37 +208,24 @@ class GameLibraryActivity : AppCompatActivity() {
       return false
     }
 
-    val internalDvdIso = resolveInternalDvdIsoFile()
-    if (internalDvdIso == null || !internalDvdIso.isFile) {
+    val dvdUri = prefs.getString("dvdUri", null)?.let(Uri::parse)
+    val dvdPath = prefs.getString("dvdPath", null)
+    val hasDvd = when {
+      dvdUri != null -> hasPersistedReadPermission(dvdUri)
+      dvdPath != null -> File(dvdPath).isFile
+      else -> false
+    }
+    if (!hasDvd) {
       Toast.makeText(this, getString(R.string.library_restart_failed), Toast.LENGTH_SHORT).show()
       return false
     }
 
     prefs.edit()
-      .putString("dvdPath", internalDvdIso.absolutePath)
-      .remove("dvdUri")
       .putBoolean("skip_game_picker", false)
       .apply()
 
     launchMainActivityForRestart()
     return true
-  }
-
-  private fun resolveInternalDvdIsoFile(): File? {
-    val external = getExternalFilesDir(null)
-    if (external != null) {
-      val externalIso = File(external, "x1box/dvd.iso")
-      if (externalIso.isFile) {
-        return externalIso
-      }
-    }
-
-    val internalIso = File(filesDir, "x1box/dvd.iso")
-    if (internalIso.isFile) {
-      return internalIso
-    }
-
-    return null
   }
 
   private fun launchMainActivityForRestart() {
