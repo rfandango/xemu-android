@@ -201,14 +201,9 @@ static std::string ToLowerAscii(std::string value) {
 static std::string ResolveAndroidAudioDriverHint() {
   // OpenSL ES is preferred over AAudio because AAudio exclusively requests
   // MMAP no-IRQ low-latency outputs (AUDIO_OUTPUT_FLAG_MMAP_NOIRQ). On some
-  // devices (e.g. Honor/Huawei with Android 14+, Snapdragon 8 Gen 3/Adreno 840)
-  // the MMAP output count is capped and openDirectOutput fails when the limit
-  // is reached, leaving the audio stream permanently inactive (isActive:0) and
-  // hanging the audio thread with 1ms timeouts in AudioStreamInternal_Client.
-  // AAudio is deliberately excluded from the default chain: if OpenSL ES fails
-  // for any reason, "android" (standard AudioTrack) is the next safe fallback.
-  // "dummy" is the silent no-op driver used as a last resort so that audio
-  // failure never prevents the emulator from starting.
+  // devices the MMAP output count is capped and openDirectOutput fails when
+  // the limit is reached, leaving the audio stream inactive. The standard
+  // Android AudioTrack backend remains the safe fallback.
   constexpr const char* kDefaultAudioDriverHint = "openslES,android,dummy";
   const char* value = SDL_getenv("XEMU_ANDROID_AUDIO_DRIVER");
   if (!value || value[0] == '\0') {
@@ -227,7 +222,10 @@ static std::string ResolveAndroidAudioDriverHint() {
     return "aaudio,android,dummy";
   }
   if (normalized == "android" || normalized == "audiotrack") {
-    return "android,dummy";
+    // Legacy recovery: a saved "android" preference should no longer force
+    // AudioTrack first, because that path was found to exit immediately on
+    // some devices. Fall back to the old OpenSL ES-first behavior.
+    return "openslES,android,dummy";
   }
   if (normalized == "null" || normalized == "none" || normalized == "dummy") {
     return "dummy";
@@ -723,7 +721,7 @@ struct EmulatorSettings {
   bool hrtf            = true;
   bool cache_shaders   = true;
   bool hard_fpu        = true;
-  bool vsync           = false;
+  bool vsync           = true;
   bool skip_boot_anim  = false;
 };
 
@@ -983,8 +981,14 @@ static SetupFiles SyncSetupFiles() {
       emuSettings.filtering = "nearest";
     }
   }
-  emuSettings.vsync = GetPrefBool(env, activity, "setting_vsync", false);
+  emuSettings.vsync = GetPrefBool(env, activity, "setting_vsync", true);
   out.audio_driver = GetPrefString(env, activity, "setting_audio_driver");
+  {
+    std::string normalized = ToLowerAscii(out.audio_driver);
+    if (normalized == "android" || normalized == "audiotrack") {
+      out.audio_driver = "openslES";
+    }
+  }
 
   int displayMode = GetPrefInt(env, activity, "setting_display_mode", 0);
   xemu_android_set_display_mode_setting(displayMode);

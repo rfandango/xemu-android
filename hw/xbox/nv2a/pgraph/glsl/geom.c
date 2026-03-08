@@ -67,6 +67,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
 
     bool need_triz = false;
     bool need_linez = false;
+    bool need_point_size = false;
     const char *layout_in = NULL;
     const char *layout_out = NULL;
     const char *body = NULL;
@@ -99,6 +100,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
                    "  emit_line(2, 0, dz);\n";
         } else {
             assert(polygon_mode == POLY_MODE_POINT);
+            need_point_size = true;
             layout_out = "layout(points, max_vertices = 3) out;\n";
             body = "  mat4 pz = calc_triz(0, 1, 2);\n"
                    "  emit_vertex(0, mat4(pz[0], pz[0], pz[0], pz[3]));\n"
@@ -134,11 +136,14 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
 
     const char *point_size_expr =
         opts.gles ? "v_vtxPointSize[index]" : "gl_in[index].gl_PointSize";
+    mstring_append(output,
+                   "void emit_vertex(int index, mat4 pz) {\n"
+                   "  gl_Position = gl_in[index].gl_Position;\n");
+    if (need_point_size) {
+        mstring_append_fmt(output, "  gl_PointSize = %s;\n", point_size_expr);
+    }
     mstring_append_fmt(
         output,
-        "void emit_vertex(int index, mat4 pz) {\n"
-        "  gl_Position = gl_in[index].gl_Position;\n"
-        "  gl_PointSize = %s;\n"
         "  vtxD0 = v_vtxD0[%s];\n"
         "  vtxD1 = v_vtxD1[%s];\n"
         "  vtxB0 = v_vtxB0[%s];\n"
@@ -155,7 +160,6 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         "  vtxPointSize = v_vtxPointSize[index];\n"
         "  EmitVertex();\n"
         "}\n",
-        point_size_expr,
         provoking_index,
         provoking_index,
         provoking_index,

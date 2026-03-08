@@ -166,7 +166,7 @@ class SettingsActivity : AppCompatActivity() {
     switchHrtf.isChecked    = prefs.getBoolean("setting_hrtf", true)
     switchShaders.isChecked = prefs.getBoolean("setting_cache_shaders", true)
     switchFpu.isChecked     = prefs.getBoolean("setting_hard_fpu", true)
-    switchVsync.isChecked   = prefs.getBoolean("setting_vsync", false)
+    switchVsync.isChecked   = prefs.getBoolean("setting_vsync", true)
     switchSkipBootAnim.isChecked =
       prefs.getBoolean("setting_skip_boot_anim", false)
 

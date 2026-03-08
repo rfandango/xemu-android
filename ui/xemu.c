@@ -128,6 +128,7 @@ static void toggle_full_screen(struct sdl2_console *scon);
 
 #ifdef __ANDROID__
 static bool g_android_gl_bgra_supported = true;
+static bool g_android_force_finish_before_swap = false;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
 static uint64_t g_android_frame_counter = 0;
@@ -218,6 +219,8 @@ static void sdl2_gl_render_texture(struct sdl2_console *scon,
 {
     int w = 0;
     int h = 0;
+    int ww = 0;
+    int wh = 0;
     int vx = 0;
     int vy = 0;
     int vw;
@@ -232,6 +235,7 @@ static void sdl2_gl_render_texture(struct sdl2_console *scon,
     android_log_gl_error("blit-start");
 
     SDL_GL_GetDrawableSize(scon->real_window, &w, &h);
+    SDL_GetWindowSize(scon->real_window, &ww, &wh);
     if (w <= 0) {
         w = 1;
     }
@@ -254,6 +258,15 @@ static void sdl2_gl_render_texture(struct sdl2_console *scon,
             vy = (h - vh) / 2;
         }
     }
+
+#ifdef __ANDROID__
+    if ((g_android_frame_counter % 60) == 0) {
+        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                            "present drawable=%dx%d window=%dx%d viewport=%d,%d %dx%d tex=%u flip=%d mode=%d",
+                            w, h, ww, wh, vx, vy, vw, vh,
+                            (unsigned)tex, flip ? 1 : 0, g_android_display_mode);
+    }
+#endif
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(vx, vy, vw, vh);
@@ -969,6 +982,7 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
     int min_window_height = 480;
     int window_width = min_window_width;
     int window_height = min_window_height;
+    SDL_DisplayMode disp_mode;
 
     const int res_table[][2] = {
         {640,  480},
@@ -998,6 +1012,22 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
         window_height = min_window_height;
     }
 
+#ifdef __ANDROID__
+    /* Android should always present into the full activity surface. Using the
+     * desktop-style startup window size here lets narrow-height devices fall
+     * into the "display smaller than requested window" path and clamps the SDL
+     * window to 640x480, which is exactly the bottom-left tiny box symptom.
+     */
+    if (SDL_GetCurrentDisplayMode(0, &disp_mode) == 0) {
+        if (disp_mode.w > 0) {
+            window_width = disp_mode.w;
+        }
+        if (disp_mode.h > 0) {
+            window_height = disp_mode.h;
+        }
+    }
+#endif
+
     // On Android, always use OpenGL window even for Vulkan because Vulkan
     // needs GL context for external memory display presentation
 #ifdef __ANDROID__
@@ -1021,12 +1051,13 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
     g_free(title);
     SDL_SetWindowMinimumSize(m_window, min_window_width, min_window_height);
 
-    SDL_DisplayMode disp_mode;
     SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(m_window), &disp_mode);
+#ifndef __ANDROID__
     if (disp_mode.w < window_width || disp_mode.h < window_height) {
         SDL_SetWindowSize(m_window, min_window_width, min_window_height);
         SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
+#endif
 
     m_context = SDL_GL_CreateContext(m_window);
 
@@ -1111,6 +1142,12 @@ static void sdl2_display_very_early_init(DisplayOptions *o)
         __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                             "GL_EXT_texture_format_BGRA8888=%s",
                             g_android_gl_bgra_supported ? "yes" : "no");
+        if ((vendor && strstr(vendor, "ARM")) ||
+            (renderer && strstr(renderer, "Mali"))) {
+            g_android_force_finish_before_swap = true;
+            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                "android: force glFinish before swap enabled");
+        }
     }
 #endif
 
@@ -1318,7 +1355,7 @@ void xemu_android_display_loop(void)
     }
 #ifdef __ANDROID__
     xemu_android_refresh_frame_limit_from_env();
-    SDL_GL_SetSwapInterval(g_config.display.window.vsync ? 1 : 0);
+    SDL_GL_SetSwapInterval(1);
     xemu_hud_init(m_window, m_context);
 #endif
     tcg_register_init_ctx();
@@ -1641,7 +1678,11 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     qemu_mutex_unlock_main_loop();
 
 #ifdef __ANDROID__
-    glFlush();
+    if (g_android_force_finish_before_swap) {
+        glFinish();
+    } else {
+        glFlush();
+    }
 #else
     glFinish();
 #endif

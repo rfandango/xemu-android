@@ -76,7 +76,7 @@ static void xemu_settings_apply_defaults(void)
         CONFIG_DISPLAY_WINDOW_STARTUP_SIZE_1280X960;
     g_config.display.window.last_width = 640;
     g_config.display.window.last_height = 480;
-    g_config.display.window.vsync = false;
+    g_config.display.window.vsync = true;
     g_config.display.ui.show_menubar = true;
     g_config.display.ui.show_notifications = true;
     g_config.display.ui.hide_cursor = true;
@@ -392,8 +392,8 @@ bool xemu_settings_load(void)
         if (auto audio_driver = android_cfg["audio_driver"].value<std::string>()) {
             std::string driver = *audio_driver;
             std::string normalized = to_lower_ascii(driver);
-            if (normalized == "audiotrack") {
-                setenv("XEMU_ANDROID_AUDIO_DRIVER", "android", 1);
+            if (normalized == "audiotrack" || normalized == "android") {
+                setenv("XEMU_ANDROID_AUDIO_DRIVER", "opensles", 1);
             } else if (normalized == "opensl" || normalized == "opensles") {
                 setenv("XEMU_ANDROID_AUDIO_DRIVER", "opensles", 1);
             } else if (normalized == "auto" || normalized == "default") {
