@@ -83,6 +83,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     super.onWindowFocusChanged(hasFocus)
     if (hasFocus) {
       hideSystemUI()
+    } else {
+      // Release all on-screen inputs when the window loses focus (e.g. a system
+      // gesture panel, notification shade, or dialog appears). Without this,
+      // triggers can stay "pressed" if the touch UP event is never delivered.
+      onScreenController?.resetAllInputs()
     }
   }
 

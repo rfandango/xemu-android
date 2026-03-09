@@ -341,8 +341,14 @@ class OnScreenController @JvmOverloads constructor(
           )
         }
       }
-      MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+      MotionEvent.ACTION_POINTER_UP -> {
         handleTouchUp(pointerId)
+      }
+      MotionEvent.ACTION_UP -> {
+        handleTouchUp(pointerId)
+        // Last finger lifted — release everything as a safety net in case
+        // pointer ID tracking got confused by multi-touch or system gestures.
+        handleCancel()
       }
       MotionEvent.ACTION_CANCEL -> {
         handleCancel()
@@ -399,14 +405,16 @@ class OnScreenController @JvmOverloads constructor(
         return
       }
       releaseButton(button, state)
-    }
-
-    val hoveredButton = buttons.entries.firstOrNull { (_, state) ->
-      state.activePointerId == -1 && isPointInCircle(x, y, state.center, state.radius)
-    }
-    if (hoveredButton != null) {
-      val (button, state) = hoveredButton
-      pressButton(button, state, pointerId)
+      // Only slide to a new button when this pointer was already tracking one.
+      // This prevents other pointers from stealing a just-released button in the
+      // same ACTION_MOVE batch, which would cause triggers (LT/RT) to get stuck.
+      val hoveredButton = buttons.entries.firstOrNull { (_, s) ->
+        s.activePointerId == -1 && isPointInCircle(x, y, s.center, s.radius)
+      }
+      if (hoveredButton != null) {
+        val (newButton, newState) = hoveredButton
+        pressButton(newButton, newState, pointerId)
+      }
     }
   }
 
