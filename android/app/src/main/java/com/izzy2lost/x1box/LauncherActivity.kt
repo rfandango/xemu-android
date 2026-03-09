@@ -4,9 +4,15 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import java.io.File
 
 class LauncherActivity : Activity() {
+  companion object {
+    private const val TAG = "LauncherActivity"
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
@@ -27,6 +33,7 @@ class LauncherActivity : Activity() {
     val hddUri = hddUriStr?.let(Uri::parse)
     val dvdUri = dvdUriStr?.let(Uri::parse)
     val gamesFolderUri = gamesFolderUriStr?.let(Uri::parse)
+    val frontendLaunch = FrontendLaunchHelper.resolve(this, intent, gamesFolderUri)
 
     val hasMcpx = hasLocalFile(mcpxPath) || (mcpxUri != null && hasPersistedReadPermission(mcpxUri))
     val hasFlash = hasLocalFile(flashPath) || (flashUri != null && hasPersistedReadPermission(flashUri))
@@ -82,6 +89,40 @@ class LauncherActivity : Activity() {
       editor.apply()
     }
 
+    if (frontendLaunch != null) {
+      if (frontendLaunch.dvdUri != null) {
+        FrontendLaunchHelper.persistReadPermission(this, intent, frontendLaunch.dvdUri)
+      }
+      prefs.edit()
+        .putBoolean("skip_game_picker", false)
+        .apply {
+          when {
+            frontendLaunch.dvdUri != null -> {
+              putString("dvdUri", frontendLaunch.dvdUri.toString())
+              remove("dvdPath")
+            }
+            frontendLaunch.dvdPath != null -> {
+              putString("dvdPath", frontendLaunch.dvdPath)
+              remove("dvdUri")
+            }
+          }
+        }
+        .apply()
+
+      if (hasMcpx && hasFlash && hasHdd) {
+        Log.i(TAG, "Frontend launch resolved via ${frontendLaunch.source}")
+        startActivity(Intent(this, MainActivity::class.java))
+        finish()
+        return
+      }
+
+      Log.i(TAG, "Frontend launch queued, but core setup is incomplete")
+      Toast.makeText(this, R.string.frontend_launch_setup_required, Toast.LENGTH_SHORT).show()
+    } else if (hasExternalLaunchPayload(intent)) {
+      Log.w(TAG, "Frontend intent received but no accessible game target was resolved")
+      Toast.makeText(this, R.string.frontend_launch_unresolved, Toast.LENGTH_LONG).show()
+    }
+
     val needsSetup = !setupComplete || !hasMcpx || !hasFlash || !hasHdd || !hasGamesFolder
     val next = if (needsSetup) SetupWizardActivity::class.java else GameLibraryActivity::class.java
 
@@ -97,5 +138,29 @@ class LauncherActivity : Activity() {
 
   private fun hasLocalFile(path: String?): Boolean {
     return path != null && File(path).isFile
+  }
+
+  private fun hasExternalLaunchPayload(intent: Intent?): Boolean {
+    if (intent == null) {
+      return false
+    }
+    if (intent.data != null || intent.clipData != null) {
+      return true
+    }
+    return sequenceOf(
+      Intent.EXTRA_STREAM,
+      "rom",
+      "ROM",
+      "path",
+      "PATH",
+      "file",
+      "FILE",
+      "filename",
+      "FILENAME",
+      "romPath",
+      "ROM_PATH",
+      "uri",
+      "URI",
+    ).any { key -> intent.hasExtra(key) }
   }
 }

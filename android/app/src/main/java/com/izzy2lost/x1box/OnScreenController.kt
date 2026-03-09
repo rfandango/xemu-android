@@ -373,19 +373,40 @@ class OnScreenController @JvmOverloads constructor(
     // Check buttons
     buttons.forEach { (button, state) ->
       if (state.activePointerId == -1 && isPointInCircle(x, y, state.center, state.radius)) {
-        state.isPressed = true
-        state.activePointerId = pointerId
-        controllerListener?.onButtonPressed(button)
+        pressButton(button, state, pointerId)
         return
       }
     }
   }
 
   private fun handleTouchMove(x: Float, y: Float, pointerId: Int) {
+    if (menuButtonPointerId == pointerId) {
+      menuButtonPressed = isPointInCircle(x, y, menuButtonCenter, menuButtonRadius)
+      return
+    }
+
     sticks.forEach { (stick, state) ->
       if (state.activePointerId == pointerId) {
         updateStickPosition(stick, state, x, y)
+        return
       }
+    }
+
+    val activeButton = buttons.entries.firstOrNull { it.value.activePointerId == pointerId }
+    if (activeButton != null) {
+      val (button, state) = activeButton
+      if (isPointInCircle(x, y, state.center, state.radius)) {
+        return
+      }
+      releaseButton(button, state)
+    }
+
+    val hoveredButton = buttons.entries.firstOrNull { (_, state) ->
+      state.activePointerId == -1 && isPointInCircle(x, y, state.center, state.radius)
+    }
+    if (hoveredButton != null) {
+      val (button, state) = hoveredButton
+      pressButton(button, state, pointerId)
     }
   }
 
@@ -415,9 +436,7 @@ class OnScreenController @JvmOverloads constructor(
     // Release buttons
     buttons.forEach { (button, state) ->
       if (state.activePointerId == pointerId) {
-        state.isPressed = false
-        state.activePointerId = -1
-        controllerListener?.onButtonReleased(button)
+        releaseButton(button, state)
       }
     }
   }
@@ -442,11 +461,38 @@ class OnScreenController @JvmOverloads constructor(
 
     buttons.forEach { (button, state) ->
       if (state.isPressed) {
-        state.isPressed = false
-        state.activePointerId = -1
-        controllerListener?.onButtonReleased(button)
+        releaseButton(button, state)
       }
     }
+  }
+
+  fun resetAllInputs() {
+    handleCancel()
+    invalidate()
+  }
+
+  override fun onDetachedFromWindow() {
+    resetAllInputs()
+    super.onDetachedFromWindow()
+  }
+
+  override fun onVisibilityChanged(changedView: View, visibility: Int) {
+    super.onVisibilityChanged(changedView, visibility)
+    if (changedView === this && visibility != View.VISIBLE) {
+      resetAllInputs()
+    }
+  }
+
+  private fun pressButton(button: Button, state: ButtonState, pointerId: Int) {
+    state.isPressed = true
+    state.activePointerId = pointerId
+    controllerListener?.onButtonPressed(button)
+  }
+
+  private fun releaseButton(button: Button, state: ButtonState) {
+    state.isPressed = false
+    state.activePointerId = -1
+    controllerListener?.onButtonReleased(button)
   }
 
   private fun updateStickPosition(stick: Stick, state: StickState, x: Float, y: Float) {

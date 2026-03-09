@@ -24,10 +24,9 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
   override fun onButtonPressed(button: OnScreenController.Button) {
     try {
       when (button) {
-        OnScreenController.Button.LEFT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_LEFT_TRIGGER, 1.0f)
+        OnScreenController.Button.LEFT_TRIGGER,
         OnScreenController.Button.RIGHT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_RIGHT_TRIGGER, 1.0f)
+          setTriggerState(button, pressed = true)
         else -> {
           val keyCode = getKeyCodeForButton(button)
           SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
@@ -41,10 +40,9 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
   override fun onButtonReleased(button: OnScreenController.Button) {
     try {
       when (button) {
-        OnScreenController.Button.LEFT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_LEFT_TRIGGER, 0.0f)
+        OnScreenController.Button.LEFT_TRIGGER,
         OnScreenController.Button.RIGHT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_RIGHT_TRIGGER, 0.0f)
+          setTriggerState(button, pressed = false)
         else -> {
           val keyCode = getKeyCodeForButton(button)
           SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
@@ -94,6 +92,23 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
     } catch (e: Exception) {
       android.util.Log.e("ControllerBridge", "Error on stick release: ${e.message}")
     }
+  }
+
+  private fun setTriggerState(button: OnScreenController.Button, pressed: Boolean) {
+    val keyCode = getKeyCodeForButton(button)
+    val axis = when (button) {
+      OnScreenController.Button.LEFT_TRIGGER -> AXIS_LEFT_TRIGGER
+      OnScreenController.Button.RIGHT_TRIGGER -> AXIS_RIGHT_TRIGGER
+      else -> return
+    }
+    val axisValue = if (pressed) 1.0f else 0.0f
+
+    if (pressed) {
+      SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
+    } else {
+      SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
+    }
+    SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, axis, axisValue)
   }
 
   private fun getKeyCodeForButton(button: OnScreenController.Button): Int {

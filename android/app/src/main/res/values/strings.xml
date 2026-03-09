@@ -87,6 +87,8 @@
   <string name="settings_filtering_linear">Linear</string>
   <string name="settings_filtering_nearest">Nearest</string>
   <string name="settings_vsync">VSync</string>
+  <string name="frontend_launch_setup_required">Finish core setup before launching from a frontend.</string>
+  <string name="frontend_launch_unresolved">Could not access that game from the frontend intent. Pick the same folder in x1box first, or use a content URI.</string>
   <string name="settings_section_vulkan_driver">Custom Vulkan Driver</string>
   <string name="settings_vulkan_driver_none">System Default</string>
   <string name="settings_vulkan_driver_browse">Browse…</string>

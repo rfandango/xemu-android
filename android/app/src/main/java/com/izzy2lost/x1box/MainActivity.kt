@@ -172,6 +172,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     scheduleStartupSnapshotLoadIfRequested()
   }
 
+  override fun onPause() {
+    onScreenController?.resetAllInputs()
+    super.onPause()
+  }
+
   private fun scheduleStartupSnapshotLoadIfRequested() {
     val slot = startupSnapshotSlot ?: return
     if (startupSnapshotLoadScheduled) {
